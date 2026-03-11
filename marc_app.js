@@ -223,6 +223,12 @@ function _doBacktest(alpha, mcBeta, N) {
 }
 
 function runBacktest() {
+  // Force-sync date inputs before running — prevents stale dates if user
+  // changes the picker and immediately clicks Run without blurring first
+  const sd=document.getElementById('start-date').value;
+  const ed=document.getElementById('end-date').value;
+  if(sd) startDate=sd;
+  if(ed) endDate=ed;
   const btn=document.getElementById('run-btn');
   btn.disabled=true;btn.textContent='Computing…';
   setTimeout(()=>{sensiCache={};_doBacktest(params.alpha,params.mcbeta,params.n);btn.disabled=false;btn.textContent='▶  Run Backtest';refreshAll();},20);
@@ -397,12 +403,9 @@ function renderDrawdown() {
   const{filtered}=filterByDates(btResults,null);
   if(!filtered.length)return;
   const x=filtered.map(r=>r.month);
-  // Rebase to window start: treat baseCum as the starting value (index 1.0)
-  const baseCum=filtered[0].port_cum/(1+filtered[0].port_ret);
-  const rebased=filtered.map(r=>r.port_cum/baseCum);
-  let peak=1;
+  let peak=filtered[0].port_cum/(1+filtered[0].port_ret);
   const dd=[];
-  for(const v of rebased){if(v>peak)peak=v;dd.push(-((peak-v)/peak)*100);}
+  for(const r of filtered){if(r.port_cum>peak)peak=r.port_cum;dd.push(-((peak-r.port_cum)/peak)*100);}
   const maxDD=Math.min(...dd);
   document.getElementById('dd-meta').textContent=`Max DD: ${maxDD.toFixed(1)}%`;
   Plotly.react('chart-dd',[{x,y:dd,type:'scatter',mode:'lines',fill:'tozeroy',line:{color:'#FF4D6D',width:1},fillcolor:'rgba(255,77,109,0.15)',hovertemplate:'%{y:.1f}%<extra>Drawdown</extra>'}],{...PL({margin:{l:46,r:10,t:4,b:28}}),yaxis:{...PL().yaxis,ticksuffix:'%'}},CFG);
@@ -777,16 +780,51 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){closeSnap();document.querySelectorAll('.cap-popup').forEach(el=>el.remove());}
 });
 
-document.getElementById('start-date').addEventListener('change',e=>{
-  startDate=e.target.value;
+function onDateChange() {
+  const sd=document.getElementById('start-date').value;
+  const ed=document.getElementById('end-date').value;
+  if(sd) startDate=sd;
+  if(ed) endDate=ed;
   sensiCache={};
+  _doBacktest(params.alpha,params.mcbeta,params.n);
   refreshAll();
-});
-document.getElementById('end-date').addEventListener('change',e=>{
-  endDate=e.target.value;
+}
+document.getElementById('start-date').addEventListener('change', onDateChange);
+document.getElementById('start-date').addEventListener('input',  onDateChange);
+document.getElementById('end-date').addEventListener('change',   onDateChange);
+document.getElementById('end-date').addEventListener('input',    onDateChange);
+
+// ═══════════════════════════════════════
+// DATE PICKER INIT
+// ═══════════════════════════════════════
+(function initDatePickers() {
+  const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const years=[];
+  for(let y=2010;y<=2025;y++) years.push(y);
+
+  function buildSelects(prefix, defaultVal) {
+    const [dYear, dMonth] = defaultVal.split('-').map(Number);
+    const mSel = document.getElementById(prefix+'-month');
+    const ySel = document.getElementById(prefix+'-year');
+    mSel.innerHTML = MONTHS.map((m,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${i+1===dMonth?'selected':''}>${m}</option>`).join('');
+    ySel.innerHTML = years.map(y=>`<option value="${y}" ${y===dYear?'selected':''}>${y}</option>`).join('');
+  }
+
+  buildSelects('start', '2010-01');
+  buildSelects('end',   '2025-12');
+})();
+
+function syncDatePicker(prefix) {
+  const m = document.getElementById(prefix+'-month').value;
+  const y = document.getElementById(prefix+'-year').value;
+  const val = y + '-' + m;
+  document.getElementById(prefix+'-date').value = val;
+  if(prefix==='start') startDate = val;
+  else endDate = val;
   sensiCache={};
+  _doBacktest(params.alpha, params.mcbeta, params.n);
   refreshAll();
-});
+}
 
 // ═══════════════════════════════════════
 // INIT
