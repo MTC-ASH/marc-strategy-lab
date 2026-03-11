@@ -205,8 +205,22 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
   <div class="psec">
     <div class="psec-title">Portfolio Window</div>
     <div class="date-row">
-      <div><label>Start</label><input type="month" id="start-date" class="date-input" value="2010-01" min="2010-01" max="2025-11"/></div>
-      <div><label>End</label><input type="month" id="end-date" class="date-input" value="2025-12" min="2010-04" max="2025-12"/></div>
+      <div>
+        <label>Start</label>
+        <div style="display:flex;gap:3px;">
+          <select id="start-month" class="date-input" style="flex:1;padding:4px 4px;" onchange="syncDatePicker('start')"></select>
+          <select id="start-year" class="date-input" style="width:58px;padding:4px 4px;" onchange="syncDatePicker('start')"></select>
+        </div>
+        <input type="hidden" id="start-date" value="2010-01"/>
+      </div>
+      <div>
+        <label>End</label>
+        <div style="display:flex;gap:3px;">
+          <select id="end-month" class="date-input" style="flex:1;padding:4px 4px;" onchange="syncDatePicker('end')"></select>
+          <select id="end-year" class="date-input" style="width:58px;padding:4px 4px;" onchange="syncDatePicker('end')"></select>
+        </div>
+        <input type="hidden" id="end-date" value="2025-12"/>
+      </div>
     </div>
     <button class="run-btn" id="run-btn" onclick="runBacktest()">▶  Run Backtest</button>
   </div>
