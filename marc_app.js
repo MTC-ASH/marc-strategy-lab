@@ -397,9 +397,12 @@ function renderDrawdown() {
   const{filtered}=filterByDates(btResults,null);
   if(!filtered.length)return;
   const x=filtered.map(r=>r.month);
-  let peak=filtered[0].port_cum/(1+filtered[0].port_ret);
+  // Rebase to window start: treat baseCum as the starting value (index 1.0)
+  const baseCum=filtered[0].port_cum/(1+filtered[0].port_ret);
+  const rebased=filtered.map(r=>r.port_cum/baseCum);
+  let peak=1;
   const dd=[];
-  for(const r of filtered){if(r.port_cum>peak)peak=r.port_cum;dd.push(-((peak-r.port_cum)/peak)*100);}
+  for(const v of rebased){if(v>peak)peak=v;dd.push(-((peak-v)/peak)*100);}
   const maxDD=Math.min(...dd);
   document.getElementById('dd-meta').textContent=`Max DD: ${maxDD.toFixed(1)}%`;
   Plotly.react('chart-dd',[{x,y:dd,type:'scatter',mode:'lines',fill:'tozeroy',line:{color:'#FF4D6D',width:1},fillcolor:'rgba(255,77,109,0.15)',hovertemplate:'%{y:.1f}%<extra>Drawdown</extra>'}],{...PL({margin:{l:46,r:10,t:4,b:28}}),yaxis:{...PL().yaxis,ticksuffix:'%'}},CFG);
