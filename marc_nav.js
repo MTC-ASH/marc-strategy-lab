@@ -76,6 +76,62 @@ function getModelWeights() {
   return weights;
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// TRADE LOG DRAWER
+// ══════════════════════════════════════════════════════════════════════════
+var tradeLogOpen = false;
+function toggleTradeLog() {
+  tradeLogOpen = !tradeLogOpen;
+  var drawer = document.getElementById('nav-tradelog-drawer');
+  var btn    = document.getElementById('nav-tradelog-btn');
+  if (!drawer) return;
+  drawer.style.transform = tradeLogOpen ? 'translateY(0)' : 'translateY(100%)';
+  if (btn) btn.style.background = tradeLogOpen ? 'var(--surface3)' : '';
+  if (tradeLogOpen) {
+    var data = navLoad();
+    renderNavTradeLogDrawer(data.trades);
+  }
+}
+
+function renderNavTradeLogDrawer(trades) {
+  var body = document.getElementById('nav-tradelog-body');
+  if (!body) return;
+  if (!trades.length) {
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:var(--subtle);font-size:11px;font-family:var(--mono);">No trades recorded yet</div>';
+    return;
+  }
+  var sorted = trades.slice().sort(function(a,b){return b.ts-a.ts;});
+
+  // Group by month
+  var grouped = {};
+  sorted.forEach(function(t) {
+    var month = t.date.slice(0,7);
+    if (!grouped[month]) grouped[month] = [];
+    grouped[month].push(t);
+  });
+
+  body.innerHTML = Object.keys(grouped).sort().reverse().map(function(month) {
+    var monthTrades = grouped[month];
+    var rows = monthTrades.map(function(t) {
+      var dc = t.direction==='buy'?'var(--green)':'var(--red)';
+      var db = t.direction==='buy'?'var(--green-dim)':'var(--red-dim)';
+      return '<tr class="nav-tlog-row">'
+        +'<td style="padding:6px 12px;font-size:11px;font-weight:600;">'+t.asset+'</td>'
+        +'<td style="padding:6px 12px;"><span style="font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:2px;background:'+db+';color:'+dc+';font-weight:700;">'+t.direction.toUpperCase()+'</span></td>'
+        +'<td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;">'+navFmtQty(t.qty)+'</td>'
+        +'<td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;">$'+t.price.toFixed(2)+'</td>'
+        +'<td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;font-weight:600;">'+navFmt$(t.qty*t.price)+'</td>'
+        +'<td style="padding:6px 12px;font-size:10px;color:var(--muted);">'+t.date+'</td>'
+        +'<td style="padding:6px 12px;font-size:10px;color:var(--subtle);font-style:italic;">'+(t.notes||'—')+'</td>'
+        +'<td style="padding:6px 12px;text-align:center;"><button onclick="navDeleteTrade(\''+t.id+'\')" style="background:none;border:none;color:var(--subtle);cursor:pointer;font-size:11px;padding:0;">✕</button></td>'
+        +'</tr>';
+    }).join('');
+    return '<tr style="background:var(--surface2);"><td colspan="8" style="padding:5px 12px;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">'+month+'</td></tr>'
+      + rows;
+  }).join('');
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // NAV SECTION — show/hide the whole NAV layer
 // ══════════════════════════════════════════════════════════════════════════
@@ -130,6 +186,49 @@ function renderNavRegimePanel() {
       +'<span class="nav-model-pct" style="color:'+tc+';">'+(h.weight*100).toFixed(1)+'%</span>'
       +'</div>';
   }).join('');
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// FRED AUTO-FILL — fetch latest macro data and pre-fill regime calc
+// ══════════════════════════════════════════════════════════════════════════
+async function navFetchMacro() {
+  var btn = document.getElementById('nav-macro-btn');
+  if (btn) { btn.textContent='↻ Fetching…'; btn.disabled=true; }
+
+  try {
+    var r = await fetch(PROXY_URL + 'macro');
+    var d = await r.json();
+
+    if (d.error) throw new Error(d.error);
+
+    // Pre-fill regime calculator inputs
+    if (d.gdp  != null) { var el=document.getElementById('nav-rc-gdp');   if(el) el.value=d.gdp.toFixed(4); }
+    if (d.unemp!= null) { var el=document.getElementById('nav-rc-unemp'); if(el) el.value=d.unemp.toFixed(1); }
+    if (d.cpi  != null) { var el=document.getElementById('nav-rc-cpi');   if(el) el.value=d.cpi.toFixed(2); }
+    if (d.pce  != null) { var el=document.getElementById('nav-rc-pce');   if(el) el.value=d.pce.toFixed(2); }
+    if (d.retail!=null) { var el=document.getElementById('nav-rc-retail');if(el) el.value=d.retail.toFixed(2); }
+    // PMI not available on FRED — leave for manual entry
+
+    // Show data dates
+    var srcEl = document.getElementById('nav-macro-source');
+    if (srcEl && d.dates) {
+      var dateStr = Object.entries(d.dates)
+        .filter(function(kv){return kv[1];})
+        .map(function(kv){return kv[0].toUpperCase()+':'+kv[1].slice(0,7);})
+        .join('  ');
+      srcEl.textContent = 'FRED data as of: ' + dateStr + ' · PMI: enter manually';
+    }
+
+    // Auto-compute regime after filling
+    navComputeRegime();
+
+  } catch(e) {
+    console.error('Macro fetch error:', e);
+    var srcEl = document.getElementById('nav-macro-source');
+    if (srcEl) srcEl.textContent = 'FRED fetch failed: ' + e.message;
+  }
+  if (btn) { btn.textContent='↻ Auto-fill from FRED'; btn.disabled=false; }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -197,6 +296,40 @@ function renderNavDashboard() {
     });
   }
 
+  // MTD / YTD performance
+  var now = new Date();
+  var mtdStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0,10);
+  var ytdStart = new Date(now.getFullYear(), 0, 1).toISOString().slice(0,10);
+
+  function calcPeriodReturn(trades, prices, sinceDate) {
+    // Build positions as of sinceDate (cost only for pre-period trades)
+    var snapPos = {}, snapVal = 0, currentVal = 0;
+    trades.filter(function(t){return t.date < sinceDate;}).forEach(function(t) {
+      if (!snapPos[t.asset]) snapPos[t.asset] = {qty:0, cost:0};
+      var sp = snapPos[t.asset];
+      if (t.direction==='buy') { sp.cost += t.qty*t.price; sp.qty += t.qty; }
+      else { sp.cost *= Math.max(0,sp.qty-t.qty)/Math.max(sp.qty,0.000001); sp.qty = Math.max(0,sp.qty-t.qty); }
+    });
+    Object.keys(snapPos).forEach(function(asset) {
+      var sp = snapPos[asset];
+      if (sp.qty <= 0) return;
+      var cp = prices[asset] ? prices[asset].price : (sp.cost/sp.qty);
+      var startPrice = sp.cost/sp.qty; // avg cost as proxy for start-of-period price
+      snapVal += sp.qty * startPrice;
+      currentVal += sp.qty * cp;
+    });
+    // Include period buys at cost
+    trades.filter(function(t){return t.date >= sinceDate && t.direction==='buy';}).forEach(function(t){
+      snapVal += t.qty * t.price;
+      var cp = prices[t.asset] ? prices[t.asset].price : t.price;
+      currentVal += t.qty * cp;
+    });
+    return snapVal > 0 ? (currentVal - snapVal) / snapVal : null;
+  }
+
+  var mtdRet = data.trades.length ? calcPeriodReturn(data.trades, prices, mtdStart) : null;
+  var ytdRet = data.trades.length ? calcPeriodReturn(data.trades, prices, ytdStart) : null;
+
   // KPIs
   var setKpi = function(id, val, cls) {
     var el = document.getElementById(id); if(!el) return;
@@ -210,6 +343,8 @@ function renderNavDashboard() {
   setKpi('nav-kpi-pos',    n+' position'+(n!==1?'s':''), 'b');
   var lf = data.lastFetched ? new Date(data.lastFetched).toLocaleTimeString() : 'Manual';
   setKpi('nav-kpi-updated', lf);
+  setKpi('nav-kpi-mtd', mtdRet!=null ? navPct(mtdRet) : '—', mtdRet!=null?(mtdRet>=0?'g':'r'):'');
+  setKpi('nav-kpi-ytd', ytdRet!=null ? navPct(ytdRet) : '—', ytdRet!=null?(ytdRet>=0?'g':'r'):'');
 
   // Build rows
   var allAssets = new Set(Object.keys(positions));
@@ -233,9 +368,21 @@ function renderNavDashboard() {
   });
   rows.sort(function(a,b){return b.value-a.value;});
 
-  // Holdings table
+  // MTD / YTD metrics
+  var metrics = computePerformanceMetrics(data.trades, prices);
+  var setPerf = function(id, m) {
+    var el = document.getElementById(id); if (!el) return;
+    if (!m) { el.textContent='—'; el.className='ts-v'; return; }
+    el.textContent = (m.pct>=0?'+':'')+(m.pct*100).toFixed(1)+'%';
+    el.className = 'ts-v '+(m.pct>=0?'g':'r');
+  };
+  setPerf('nav-kpi-mtd', metrics.mtd);
+  setPerf('nav-kpi-ytd', metrics.ytd);
+
+  // ALL-ASSET table (replaces sparse holdings table)
   var TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00D68F'};
-  var tbody = document.getElementById('nav-holdings-tbody');
+  renderAllAssetTable(positions, prices, modelWeights, totalValue);
+  if (false) { var tbody = document.getElementById('nav-holdings-tbody');
   if (tbody) {
     if (!rows.length) {
       tbody.innerHTML = '<tr><td colspan="11" style="padding:40px;text-align:center;color:var(--subtle);font-size:11px;font-family:var(--mono);">No trades yet — click + Trade to get started</td></tr>';
@@ -271,13 +418,20 @@ function renderNavDashboard() {
           +'</td></tr>';
       }).join('');
     }
-  }
+  } } // end if(false)
 
   // Charts
   renderNavCharts(rows, totalValue);
 
   // Trade log
   renderNavTradeLog(data.trades);
+
+  // Price ticker
+  renderPriceTicker();
+
+  // Trade log drawer count
+  var countEl = document.getElementById('nav-tradelog-count');
+  if (countEl) countEl.textContent = data.trades.length + ' trade' + (data.trades.length!==1?'s':'');
 }
 
 function renderNavCharts(rows, totalValue) {
@@ -369,6 +523,34 @@ function renderNavTradeLog(trades) {
   }).join('');
 }
 
+
+// ── All-assets price ticker ────────────────────────────────────────────
+function renderPriceTicker() {
+  var ticker = document.getElementById('nav-price-ticker');
+  if (!ticker) return;
+  var data = navLoad();
+  var prices = data.prices || {};
+  var assets = window.RAW ? window.RAW.assets : [];
+  if (!assets.length) return;
+
+  var TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00D68F'};
+
+  ticker.innerHTML = assets.map(function(a) {
+    var pd = prices[a.asset];
+    var tc = TC[a.type]||'#888';
+    var price = pd ? pd.price : null;
+    var chg = pd ? pd.change24h : null;
+    var chgColor = chg!=null ? (chg>=0?'var(--green)':'var(--red)') : 'var(--subtle)';
+    var dot = pd ? '<span class="live-dot live"></span>' : '<span class="live-dot stale"></span>';
+    return '<div class="price-pill">'
+      +dot
+      +'<span class="pp-name" style="color:'+tc+';">'+a.asset+'</span>'
+      +'<span class="pp-price">'+(price ? (price>=1000?'$'+(price/1000).toFixed(1)+'k':price<1?'$'+price.toFixed(4):'$'+price.toFixed(2)) : '—')+'</span>'
+      +(chg!=null?'<span class="pp-chg" style="color:'+chgColor+';">'+(chg>=0?'+':'')+chg.toFixed(1)+'%</span>':'')
+      +'</div>';
+  }).join('');
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // LIVE PRICE FETCH
 // ══════════════════════════════════════════════════════════════════════════
@@ -376,14 +558,14 @@ async function navFetchPrices() {
   var btn = document.getElementById('nav-price-btn');
   if (btn) { btn.textContent='↻ Fetching…'; btn.disabled=true; }
   var data = navLoad();
-  var positions = computePositions(data.trades);
-  var assets = Object.keys(positions);
+  // Always fetch ALL 30 assets, not just current positions
+  var assets = window.RAW ? window.RAW.assets.map(function(a){return a.asset;}) : Object.keys(computePositions(data.trades));
   if (!assets.length) {
-    if (btn) { btn.textContent='↻ Prices'; btn.disabled=false; }
+    if (btn) { btn.textContent='↻ Refresh Prices'; btn.disabled=false; }
     return;
   }
   try {
-    var r = await fetch(PROXY_URL + '/prices?assets=' + assets.join(','));
+    var r = await fetch(PROXY_URL.replace(/\/+$/, '') + '/prices?assets=' + assets.join(','));
     var result = await r.json();
     if (result.prices) {
       if (!data.prices) data.prices = {};
@@ -527,7 +709,7 @@ async function navRunAgent() {
   var userMsg = context + (extraCtx ? '\n\nContext: ' + extraCtx : '');
 
   try {
-    var endpoint = PROXY_URL ? PROXY_URL + '/ai' : 'https://api.anthropic.com/v1/messages';
+    var endpoint = PROXY_URL ? PROXY_URL + 'ai' : 'https://api.anthropic.com/v1/messages';
     var r = await fetch(endpoint, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -597,4 +779,251 @@ function renderMarkdown(text) {
   h = out.join('\n');
   h = h.replace(/^(?!<[htuo\d\/]|$)(.+)$/gm,'<p>$1</p>');
   return h;
+}
+
+// ═══════════════════════════════════════
+// TRADE LOG DRAWER
+// ═══════════════════════════════════════
+function toggleTradeLog() {
+  var drawer = document.getElementById('nav-tradelog-drawer');
+  if (!drawer) return;
+  var open = drawer.style.display === 'flex';
+  drawer.style.display = open ? 'none' : 'flex';
+  var btn = document.getElementById('nav-tradelog-btn');
+  if (btn) btn.style.borderColor = open ? '' : 'var(--green)';
+  if (btn) btn.style.color = open ? '' : 'var(--green)';
+  if (!open) renderTradeLogDrawer();
+}
+
+function renderTradeLogDrawer() {
+  var data = navLoad();
+  var trades = data.trades || [];
+  var filterSel = document.getElementById('nav-tradelog-filter');
+  var sortSel   = document.getElementById('nav-tradelog-sort');
+  var countEl   = document.getElementById('nav-tradelog-count');
+  var tbody     = document.getElementById('nav-tradelog-tbody');
+  if (!tbody) return;
+
+  // Populate asset filter dropdown
+  var assets = [...new Set(trades.map(function(t){return t.asset;}))].sort();
+  if (filterSel) {
+    var curFilter = filterSel.value;
+    filterSel.innerHTML = '<option value="all">All assets</option>'
+      + assets.map(function(a){return '<option value="'+a+'"'+(a===curFilter?' selected':'')+'>'+a+'</option>';}).join('');
+  }
+
+  // Filter + sort
+  var filter = filterSel ? filterSel.value : 'all';
+  var sortOrder = sortSel ? sortSel.value : 'desc';
+  var filtered = filter === 'all' ? trades.slice() : trades.filter(function(t){return t.asset===filter;});
+  filtered.sort(function(a,b){ return sortOrder==='desc' ? b.ts-a.ts : a.ts-b.ts; });
+
+  if (countEl) countEl.textContent = filtered.length + ' trade' + (filtered.length!==1?'s':'');
+
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:var(--subtle);font-family:var(--mono);font-size:11px;">No trades recorded yet</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(function(t) {
+    var dc = t.direction==='buy'?'var(--green)':'var(--red)';
+    var db = t.direction==='buy'?'var(--green-dim)':'var(--red-dim)';
+    var total = t.qty * t.price;
+    var ao = window.RAW.assets.find(function(a){return a.asset===t.asset;});
+    var type = ao ? ao.type : '';
+    return '<tr style="border-bottom:1px solid var(--border);" onmouseover="this.style.background=\'var(--surface2)\'" onmouseout="this.style.background=\'\'">'
+      +'<td style="padding:7px 14px;font-family:var(--mono);font-size:10px;color:var(--muted);">'+t.date+'</td>'
+      +'<td style="padding:7px 14px;"><span style="font-weight:600;font-size:11px;">'+t.asset+'</span>'
+      +(type?'<span class="badge badge-'+type+'" style="margin-left:5px;">'+type.slice(0,3)+'</span>':'')+'</td>'
+      +'<td style="padding:7px 14px;text-align:center;"><span style="font-family:var(--mono);font-size:9px;font-weight:700;padding:2px 8px;border-radius:2px;background:'+db+';color:'+dc+';">'+t.direction.toUpperCase()+'</span></td>'
+      +'<td style="padding:7px 14px;text-align:right;font-family:var(--mono);font-size:11px;">'+navFmtQty(t.qty)+'</td>'
+      +'<td style="padding:7px 14px;text-align:right;font-family:var(--mono);font-size:11px;">$'+t.price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+'</td>'
+      +'<td style="padding:7px 14px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;">'+navFmt$(total)+'</td>'
+      +'<td style="padding:7px 14px;font-size:10px;color:var(--muted);font-style:italic;">'+(t.notes||'—')+'</td>'
+      +'<td style="padding:7px 14px;text-align:center;"><button onclick="navDeleteTrade(\''+t.id+'\')" style="background:none;border:none;color:var(--subtle);cursor:pointer;font-size:11px;padding:0;" title="Delete">✕</button></td>'
+      +'</tr>';
+  }).join('');
+}
+
+// ═══════════════════════════════════════
+// MTD / YTD METRICS
+// ═══════════════════════════════════════
+function computePerformanceMetrics(trades, prices) {
+  var now = new Date();
+  var mtdStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0,10);
+  var ytdStart = new Date(now.getFullYear(), 0, 1).toISOString().slice(0,10);
+
+  function calcPeriodPnl(fromDate) {
+    // Cost basis of trades from this period
+    var pos = {};
+    // Build full position first (all time)
+    trades.forEach(function(t) {
+      if (!pos[t.asset]) pos[t.asset] = {qty:0, costBasis:0};
+      var p = pos[t.asset];
+      if (t.direction==='buy') {
+        var nq = p.qty + t.qty;
+        p.costBasis = nq > 0 ? (p.costBasis*p.qty + t.price*t.qty)/nq : 0;
+        p.qty = nq;
+      } else {
+        p.qty = Math.max(0, p.qty - t.qty);
+      }
+    });
+    // Calculate P&L for period trades
+    var periodBuyCost = 0, periodBuyValue = 0;
+    trades.filter(function(t){ return t.date >= fromDate && t.direction==='buy'; }).forEach(function(t) {
+      var cp = prices[t.asset] ? prices[t.asset].price : t.price;
+      periodBuyCost  += t.qty * t.price;
+      periodBuyValue += t.qty * cp;
+    });
+    if (periodBuyCost === 0) return null;
+    return {pnl: periodBuyValue - periodBuyCost, pct: (periodBuyValue-periodBuyCost)/periodBuyCost};
+  }
+
+  return {
+    mtd: computePeriodReturn(trades, prices, mtdStart),
+    ytd: computePeriodReturn(trades, prices, ytdStart)
+  };
+}
+
+function computePeriodReturn(trades, prices, fromDate) {
+  var periodTrades = trades.filter(function(t){ return t.date >= fromDate; });
+  if (!periodTrades.length) return null;
+  var cost = 0, currentVal = 0;
+  periodTrades.forEach(function(t) {
+    var cp = prices[t.asset] ? prices[t.asset].price : t.price;
+    if (t.direction === 'buy') {
+      cost += t.qty * t.price;
+      currentVal += t.qty * cp;
+    } else {
+      cost -= t.qty * t.price;
+      currentVal -= t.qty * cp;
+    }
+  });
+  if (cost <= 0) return null;
+  return {pnl: currentVal-cost, pct: (currentVal-cost)/cost};
+}
+
+// ═══════════════════════════════════════
+// FRED AUTO-FILL
+// ═══════════════════════════════════════
+async function navAutoFillFRED() {
+  var btn = document.getElementById('nav-fred-btn');
+  if (btn) { btn.textContent = '⟳ Loading…'; btn.disabled = true; }
+
+  try {
+    var r = await fetch(PROXY_URL.replace(/\/+$/, '') + '/fred');
+    var d = await r.json();
+
+    if (d.error) throw new Error(d.error);
+
+    // Fill inputs
+    var fill = function(id, val) {
+      var el = document.getElementById(id);
+      if (el && val != null) el.value = parseFloat(val).toFixed(4);
+    };
+    fill('nav-rc-gdp',    d.gdp);
+    fill('nav-rc-pmi',    d.pmi);
+    fill('nav-rc-unemp',  d.unemp);
+    fill('nav-rc-retail', d.retail);
+    fill('nav-rc-cpi',    d.cpi);
+    fill('nav-rc-pce',    d.pce);
+
+    // Show data age
+    var res = document.getElementById('nav-rc-result');
+    if (res) res.innerHTML = '<div style="margin-top:6px;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;font-family:var(--mono);font-size:9px;color:var(--subtle);">FRED data loaded — latest available releases<br>Click ↻ Compute to calculate regime</div>';
+
+    // Auto-compute
+    navComputeRegime();
+  } catch(e) {
+    var res = document.getElementById('nav-rc-result');
+    if (res) res.innerHTML = '<div style="margin-top:6px;padding:6px 8px;background:var(--red-dim);border:1px solid var(--red);border-radius:3px;font-family:var(--mono);font-size:9px;color:var(--red);">FRED fetch failed: '+e.message+'<br>Deploy updated worker with FRED_API_KEY</div>';
+  }
+
+  if (btn) { btn.textContent = '⟳ FRED Auto-fill'; btn.disabled = false; }
+}
+
+// ═══════════════════════════════════════
+// ALL-ASSET MARKET OVERVIEW TABLE
+// ═══════════════════════════════════════
+function renderAllAssetTable(positions, prices, modelWeights, totalValue) {
+  var tbody = document.getElementById('nav-holdings-tbody');
+  if (!tbody) return;
+
+  var TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00D68F'};
+  var allAssets = window.RAW.assets;
+
+  var rows = allAssets.map(function(ao) {
+    var p = positions[ao.asset];
+    var pd = prices[ao.asset];
+    var mh = modelWeights[ao.asset];
+    var cp = pd ? pd.price : (p ? p.costBasis : null);
+    var c24 = pd ? pd.change24h : null;
+    var value = p && cp ? p.qty * cp : 0;
+    var cost  = p ? p.qty * p.costBasis : 0;
+    var pnl   = value - cost;
+    var pnlPct = cost > 0 ? pnl/cost : 0;
+    var actualPct = totalValue > 0 && p ? value/totalValue : 0;
+    var mw = mh ? mh.weight : 0;
+    var delta = actualPct - mw;
+    var hasPos = p && p.qty > 0.000001;
+    var hasLive = !!pd;
+    return {asset:ao.asset, ao, p, cp, c24, value, cost, pnl, pnlPct,
+            actualPct, mw, delta, hasPos, hasLive, type:ao.type};
+  });
+
+  // Sort: positions first by value, then model holdings, then rest by type
+  rows.sort(function(a,b) {
+    if (a.hasPos && !b.hasPos) return -1;
+    if (!a.hasPos && b.hasPos) return 1;
+    if (a.hasPos && b.hasPos) return b.value - a.value;
+    if (a.mw && !b.mw) return -1;
+    if (!a.mw && b.mw) return 1;
+    return a.asset.localeCompare(b.asset);
+  });
+
+  tbody.innerHTML = rows.map(function(r) {
+    var dc = Math.abs(r.delta)<0.02?'var(--green)':Math.abs(r.delta)<0.05?'var(--amber)':'var(--red)';
+    var pc = r.pnl>=0?'var(--green)':'var(--red)';
+    var cc = r.c24!=null?(r.c24>=0?'var(--green)':'var(--red)'):'var(--subtle)';
+    var tc = TC[r.type]||'#888';
+    var rowOpacity = r.hasPos ? '' : r.mw > 0 ? 'opacity:0.75;' : 'opacity:0.4;';
+    var priceStr = r.cp != null ? navFmt$(r.cp) : '—';
+    var dotCls = r.hasLive ? 'live' : 'stale';
+
+    return '<tr style="border-bottom:1px solid var(--border);'+rowOpacity+'" '
+      +'onmouseover="this.style.background=\'var(--surface2)\';this.style.opacity=\'1\';" '
+      +'onmouseout="this.style.background=\'\';this.style.opacity=\''+( r.hasPos?'1':r.mw>0?'0.75':'0.4')+'\';">'
+      +'<td style="padding:5px 10px;">'
+        +'<span style="font-weight:600;font-size:11px;">'+r.asset+'</span>'
+        +'<span class="badge badge-'+r.type+'" style="margin-left:5px;font-size:9px;color:'+tc+';">'+r.type.slice(0,3)+'</span>'
+        +(r.hasPos?'<span style="margin-left:5px;width:5px;height:5px;border-radius:50%;background:var(--green);display:inline-block;"></span>':'')
+      +'</td>'
+      // Qty
+      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">'+(r.hasPos?navFmtQty(r.p.qty):'—')+'</td>'
+      // Avg cost
+      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">'+(r.hasPos?'$'+r.p.costBasis.toFixed(2):'—')+'</td>'
+      // Live price — shown for ALL assets
+      +'<td style="padding:5px 10px;"><div class="live-price"><span class="live-dot '+dotCls+'"></span><span style="font-family:var(--mono);font-size:12px;font-weight:600;color:'+(r.hasLive?'var(--text)':'var(--muted)')+';">'+priceStr+'</span></div></td>'
+      // 24h
+      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:'+cc+';">'
+        +(r.c24!=null?(r.c24>=0?'+':'')+r.c24.toFixed(2)+'%':'—')+'</td>'
+      // Value
+      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;">'+(r.hasPos?navFmt$(r.value):'—')+'</td>'
+      // P&L
+      +'<td class="pnl-cell" style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:'+pc+';">'
+        +(r.hasPos?(r.pnl>=0?'+':'')+navFmt$(r.pnl)+'<br><span class="pnl-pct">'+(r.pnlPct>=0?'+':'')+(r.pnlPct*100).toFixed(1)+'%</span>':'—')+'</td>'
+      // Actual %
+      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;">'+(r.hasPos?(r.actualPct*100).toFixed(1)+'%':'—')+'</td>'
+      // Model %
+      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:'+tc+';">'+(r.mw>0?(r.mw*100).toFixed(1)+'%':'—')+'</td>'
+      // Delta
+      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;color:'+dc+';">'
+        +((r.mw>0||r.hasPos)?(r.delta>=0?'+':'')+(r.delta*100).toFixed(1)+'%':'—')+'</td>'
+      // Actions
+      +'<td style="padding:5px 10px;text-align:center;">'
+        +'<button onclick="navOpenTradeModal(\''+r.asset+'\',\'buy\')" style="font-size:9px;background:var(--green-dim);border:1px solid var(--green-mid);color:var(--green);padding:2px 5px;border-radius:2px;cursor:pointer;margin-right:2px;">B</button>'
+        +(r.hasPos?'<button onclick="navOpenTradeModal(\''+r.asset+'\',\'sell\')" style="font-size:9px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);padding:2px 5px;border-radius:2px;cursor:pointer;">S</button>':'')
+      +'</td>'
+      +'</tr>';
+  }).join('');
 }
