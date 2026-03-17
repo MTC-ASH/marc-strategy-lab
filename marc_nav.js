@@ -914,34 +914,39 @@ function computePeriodReturn(trades, prices, fromDate) {
 async function navAutoFillFRED() {
   var btn = document.getElementById('nav-fred-btn');
   if (btn) { btn.textContent = '⟳ Loading…'; btn.disabled = true; }
+  var res = document.getElementById('nav-rc-result');
 
   try {
-    var r = await fetch(PROXY_URL.replace(/\/+$/, '') + '/fred');
+    var r = await fetch((PROXY_URL||'').replace(/\/+$/, '') + '/fred');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
-
     if (d.error) throw new Error(d.error);
 
-    // Fill inputs
-    var fill = function(id, val) {
+    // Worker /fred returns: gdp (QoQ annualised %), pmi (PMI proxy),
+    // unemp (%), retail (MoM %), cpi (YoY %), pce (YoY %)
+    var setField = function(id, val, decimals) {
       var el = document.getElementById(id);
-      if (el && val != null) el.value = parseFloat(val).toFixed(4);
+      if (el && val != null && !isNaN(val)) el.value = parseFloat(val).toFixed(decimals||2);
     };
-    fill('nav-rc-gdp',    d.gdp);
-    fill('nav-rc-pmi',    d.pmi);
-    fill('nav-rc-unemp',  d.unemp);
-    fill('nav-rc-retail', d.retail);
-    fill('nav-rc-cpi',    d.cpi);
-    fill('nav-rc-pce',    d.pce);
+    setField('nav-rc-gdp',    d.gdp != null ? d.gdp / 100 : null, 4); // convert % to decimal
+    setField('nav-rc-pmi',    d.pmi,    1);
+    setField('nav-rc-unemp',  d.unemp,  1);
+    setField('nav-rc-retail', d.retail != null ? d.retail / 100 : null, 4); // % to decimal
+    setField('nav-rc-cpi',    d.cpi,    2);
+    setField('nav-rc-pce',    d.pce,    2);
 
-    // Show data age
-    var res = document.getElementById('nav-rc-result');
-    if (res) res.innerHTML = '<div style="margin-top:6px;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;font-family:var(--mono);font-size:9px;color:var(--subtle);">FRED data loaded — latest available releases<br>Click ↻ Compute to calculate regime</div>';
+    // Build date summary
+    var dates = ['gdp','pmi','unemp','retail','cpi','pce']
+      .filter(function(k){ return d[k+'_date']; })
+      .map(function(k){ return k.toUpperCase()+':'+d[k+'_date'].slice(0,7); })
+      .join('  ');
 
-    // Auto-compute
+    if (res) res.innerHTML = '<div style="margin-top:6px;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;font-family:var(--mono);font-size:9px;color:var(--subtle);">FRED data loaded<br>'+dates+'<br><span style="color:var(--amber);">PMI is estimated — enter actual if available</span></div>';
+
     navComputeRegime();
   } catch(e) {
-    var res = document.getElementById('nav-rc-result');
-    if (res) res.innerHTML = '<div style="margin-top:6px;padding:6px 8px;background:var(--red-dim);border:1px solid var(--red);border-radius:3px;font-family:var(--mono);font-size:9px;color:var(--red);">FRED fetch failed: '+e.message+'<br>Deploy updated worker with FRED_API_KEY</div>';
+    if (res) res.innerHTML = '<div style="margin-top:6px;padding:6px 8px;background:var(--red-dim);border:1px solid var(--red);border-radius:3px;font-family:var(--mono);font-size:9px;color:var(--red);">FRED failed: '+e.message+'</div>';
+    console.error('FRED error:', e);
   }
 
   if (btn) { btn.textContent = '⟳ FRED Auto-fill'; btn.disabled = false; }
@@ -957,6 +962,7 @@ function renderAllAssetTable(positions, prices, modelWeights, totalValue) {
   var TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00D68F'};
   var allAssets = window.RAW.assets;
 
+  // Build rows with classification
   var rows = allAssets.map(function(ao) {
     var p = positions[ao.asset];
     var pd = prices[ao.asset];
@@ -966,69 +972,280 @@ function renderAllAssetTable(positions, prices, modelWeights, totalValue) {
     var value = p && cp ? p.qty * cp : 0;
     var cost  = p ? p.qty * p.costBasis : 0;
     var pnl   = value - cost;
-    var pnlPct = cost > 0 ? pnl/cost : 0;
-    var actualPct = totalValue > 0 && p ? value/totalValue : 0;
+    var pnlPct = cost > 0 ? pnl / cost : 0;
+    var actualPct = totalValue > 0 && p ? value / totalValue : 0;
     var mw = mh ? mh.weight : 0;
     var delta = actualPct - mw;
     var hasPos = p && p.qty > 0.000001;
     var hasLive = !!pd;
+    // Classification: 'portfolio' | 'model' | 'watch'
+    var cls = hasPos ? 'portfolio' : (mw > 0 ? 'model' : 'watch');
     return {asset:ao.asset, ao, p, cp, c24, value, cost, pnl, pnlPct,
-            actualPct, mw, delta, hasPos, hasLive, type:ao.type};
+            actualPct, mw, delta, hasPos, hasLive, type:ao.type, cls};
   });
 
-  // Sort: positions first by value, then model holdings, then rest by type
-  rows.sort(function(a,b) {
-    if (a.hasPos && !b.hasPos) return -1;
-    if (!a.hasPos && b.hasPos) return 1;
-    if (a.hasPos && b.hasPos) return b.value - a.value;
-    if (a.mw && !b.mw) return -1;
-    if (!a.mw && b.mw) return 1;
+  // Sort: portfolio first (by value desc), then model-only (by weight desc), then watch (alphabetical)
+  rows.sort(function(a, b) {
+    var order = {portfolio:0, model:1, watch:2};
+    if (order[a.cls] !== order[b.cls]) return order[a.cls] - order[b.cls];
+    if (a.cls === 'portfolio') return b.value - a.value;
+    if (a.cls === 'model') return b.mw - a.mw;
     return a.asset.localeCompare(b.asset);
   });
 
-  tbody.innerHTML = rows.map(function(r) {
-    var dc = Math.abs(r.delta)<0.02?'var(--green)':Math.abs(r.delta)<0.05?'var(--amber)':'var(--red)';
-    var pc = r.pnl>=0?'var(--green)':'var(--red)';
-    var cc = r.c24!=null?(r.c24>=0?'var(--green)':'var(--red)'):'var(--subtle)';
-    var tc = TC[r.type]||'#888';
-    var rowOpacity = r.hasPos ? '' : r.mw > 0 ? 'opacity:0.75;' : 'opacity:0.4;';
-    var priceStr = r.cp != null ? navFmt$(r.cp) : '—';
-    var dotCls = r.hasLive ? 'live' : 'stale';
+  var portfolioRows = rows.filter(function(r){ return r.cls === 'portfolio'; });
+  var modelRows     = rows.filter(function(r){ return r.cls === 'model'; });
+  var watchRows     = rows.filter(function(r){ return r.cls === 'watch'; });
 
-    return '<tr style="border-bottom:1px solid var(--border);'+rowOpacity+'" '
-      +'onmouseover="this.style.background=\'var(--surface2)\';this.style.opacity=\'1\';" '
-      +'onmouseout="this.style.background=\'\';this.style.opacity=\''+( r.hasPos?'1':r.mw>0?'0.75':'0.4')+'\';">'
-      +'<td style="padding:5px 10px;">'
-        +'<span style="font-weight:600;font-size:11px;">'+r.asset+'</span>'
-        +'<span class="badge badge-'+r.type+'" style="margin-left:5px;font-size:9px;color:'+tc+';">'+r.type.slice(0,3)+'</span>'
-        +(r.hasPos?'<span style="margin-left:5px;width:5px;height:5px;border-radius:50%;background:var(--green);display:inline-block;"></span>':'')
-      +'</td>'
+  function sectionHeader(label, count, color) {
+    return '<tr class="nav-section-row"><td colspan="11" style="color:'+color+';letter-spacing:1.5px;">'
+      + label + ' <span style="opacity:.5;font-size:8px;">'+count+' assets</span></td></tr>';
+  }
+
+  function buildRow(r) {
+    var dc = Math.abs(r.delta)<0.02?'var(--green)':Math.abs(r.delta)<0.05?'var(--amber)':'var(--red)';
+    var pc = r.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    var cc = r.c24 != null ? (r.c24 >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--subtle)';
+    var tc = TC[r.type] || '#888';
+    var dotCls = r.hasLive ? 'live' : 'stale';
+    var trClass = r.cls === 'portfolio' ? 'in-portfolio' : (r.cls === 'model' ? 'model-only' : 'watch-only');
+
+    return '<tr class="'+trClass+'" style="border-bottom:1px solid var(--border);" '
+      + 'onmouseover="this.style.background=\'var(--surface2)\';this.style.opacity=\'1\';" '
+      + 'onmouseout="this.style.background=\'\';this.style.opacity=\'\';">'
+      // Asset name + badge
+      + '<td style="padding:5px 10px;">'
+      +   '<span style="font-weight:'+(r.hasPos?'700':'500')+';font-size:11px;">'+r.asset+'</span>'
+      +   '<span class="badge badge-'+r.type+'" style="margin-left:5px;font-size:8px;">'+r.type.slice(0,3)+'</span>'
+      + '</td>'
       // Qty
-      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">'+(r.hasPos?navFmtQty(r.p.qty):'—')+'</td>'
+      + '<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">'+(r.hasPos?navFmtQty(r.p.qty):'—')+'</td>'
       // Avg cost
-      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">'+(r.hasPos?'$'+r.p.costBasis.toFixed(2):'—')+'</td>'
-      // Live price — shown for ALL assets
-      +'<td style="padding:5px 10px;"><div class="live-price"><span class="live-dot '+dotCls+'"></span><span style="font-family:var(--mono);font-size:12px;font-weight:600;color:'+(r.hasLive?'var(--text)':'var(--muted)')+';">'+priceStr+'</span></div></td>'
+      + '<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">'+(r.hasPos?'$'+r.p.costBasis.toFixed(2):'—')+'</td>'
+      // Live price
+      + '<td style="padding:5px 10px;"><div class="live-price">'
+      +   '<span class="live-dot '+dotCls+'"></span>'
+      +   '<span style="font-family:var(--mono);font-size:'+(r.hasPos?'13':'11')+'px;font-weight:'+(r.hasPos?'700':'500')+';color:'+(r.hasLive?'var(--text)':'var(--muted)')+';">'+(r.cp!=null?navFmt$(r.cp):'—')+'</span>'
+      + '</div></td>'
       // 24h
-      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:'+cc+';">'
-        +(r.c24!=null?(r.c24>=0?'+':'')+r.c24.toFixed(2)+'%':'—')+'</td>'
+      + '<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:'+cc+';">'+(r.c24!=null?(r.c24>=0?'+':'')+r.c24.toFixed(2)+'%':'—')+'</td>'
       // Value
-      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;">'+(r.hasPos?navFmt$(r.value):'—')+'</td>'
+      + '<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;">'+(r.hasPos?navFmt$(r.value):'—')+'</td>'
       // P&L
-      +'<td class="pnl-cell" style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:'+pc+';">'
-        +(r.hasPos?(r.pnl>=0?'+':'')+navFmt$(r.pnl)+'<br><span class="pnl-pct">'+(r.pnlPct>=0?'+':'')+(r.pnlPct*100).toFixed(1)+'%</span>':'—')+'</td>'
+      + '<td class="pnl-cell" style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:'+pc+';">'
+      +   (r.hasPos?(r.pnl>=0?'+':'')+navFmt$(r.pnl)+'<br><span class="pnl-pct">'+(r.pnlPct>=0?'+':'')+(r.pnlPct*100).toFixed(1)+'%</span>':'—')
+      + '</td>'
       // Actual %
-      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;">'+(r.hasPos?(r.actualPct*100).toFixed(1)+'%':'—')+'</td>'
+      + '<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;">'+(r.hasPos?(r.actualPct*100).toFixed(1)+'%':'—')+'</td>'
       // Model %
-      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:'+tc+';">'+(r.mw>0?(r.mw*100).toFixed(1)+'%':'—')+'</td>'
+      + '<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:'+tc+';">'+(r.mw>0?(r.mw*100).toFixed(1)+'%':'—')+'</td>'
       // Delta
-      +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;color:'+dc+';">'
-        +((r.mw>0||r.hasPos)?(r.delta>=0?'+':'')+(r.delta*100).toFixed(1)+'%':'—')+'</td>'
+      + '<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;color:'+dc+';">'
+      +   ((r.mw>0||r.hasPos)?(r.delta>=0?'+':'')+(r.delta*100).toFixed(1)+'%':'—')
+      + '</td>'
       // Actions
-      +'<td style="padding:5px 10px;text-align:center;">'
-        +'<button onclick="navOpenTradeModal(\''+r.asset+'\',\'buy\')" style="font-size:9px;background:var(--green-dim);border:1px solid var(--green-mid);color:var(--green);padding:2px 5px;border-radius:2px;cursor:pointer;margin-right:2px;">B</button>'
-        +(r.hasPos?'<button onclick="navOpenTradeModal(\''+r.asset+'\',\'sell\')" style="font-size:9px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);padding:2px 5px;border-radius:2px;cursor:pointer;">S</button>':'')
-      +'</td>'
-      +'</tr>';
-  }).join('');
+      + '<td style="padding:5px 10px;text-align:center;white-space:nowrap;">'
+      +   '<button onclick="navOpenTradeModal(\''+r.asset+'\',\'buy\')" style="font-size:9px;background:var(--green-dim);border:1px solid var(--green-mid);color:var(--green);padding:2px 5px;border-radius:2px;cursor:pointer;margin-right:2px;">B</button>'
+      +   (r.hasPos?'<button onclick="navOpenTradeModal(\''+r.asset+'\',\'sell\')" style="font-size:9px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);padding:2px 5px;border-radius:2px;cursor:pointer;">S</button>':'')
+      + '</td>'
+      + '</tr>';
+  }
+
+  var html = '';
+  if (portfolioRows.length) {
+    html += sectionHeader('◆ In Portfolio', portfolioRows.length, 'var(--green)');
+    html += portfolioRows.map(buildRow).join('');
+  }
+  if (modelRows.length) {
+    html += sectionHeader('◈ Model — not held', modelRows.length, 'var(--blue)');
+    html += modelRows.map(buildRow).join('');
+  }
+  if (watchRows.length) {
+    html += sectionHeader('○ Watchlist', watchRows.length, 'var(--subtle)');
+    html += watchRows.map(buildRow).join('');
+  }
+  if (!html) {
+    html = '<tr><td colspan="11" style="padding:40px;text-align:center;color:var(--subtle);font-size:11px;font-family:var(--mono);">No trades yet — click + Trade to get started</td></tr>';
+  }
+  tbody.innerHTML = html;
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CIO AGENT CHAT SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Persistent chat history for this session
+var navChatHistory = [];
+
+function navChatAddMessage(role, content, isThinking) {
+  var thread = document.getElementById('nav-chat-thread');
+  var empty  = document.getElementById('nav-chat-empty');
+  if (empty) empty.style.display = 'none';
+  if (!thread) return;
+
+  var id = 'msg-' + Date.now();
+  var ts = new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+  var div = document.createElement('div');
+  div.className = 'nav-chat-msg ' + role + (isThinking ? ' nav-chat-thinking' : '');
+  div.id = id;
+
+  var bubble = document.createElement('div');
+  bubble.className = 'nav-chat-bubble';
+  if (isThinking) {
+    bubble.textContent = '⬡ Analysing…';
+  } else if (role === 'user') {
+    bubble.textContent = content;
+  } else {
+    bubble.innerHTML = renderMarkdown(content);
+  }
+
+  var tsEl = document.createElement('div');
+  tsEl.className = 'nav-chat-ts';
+  tsEl.textContent = ts;
+
+  div.appendChild(bubble);
+  div.appendChild(tsEl);
+  thread.appendChild(div);
+  thread.scrollTop = thread.scrollHeight;
+  return id;
+}
+
+function navChatUpdateMessage(id, content) {
+  var msg = document.getElementById(id);
+  if (!msg) return;
+  msg.classList.remove('nav-chat-thinking');
+  var bubble = msg.querySelector('.nav-chat-bubble');
+  if (bubble) bubble.innerHTML = renderMarkdown(content);
+  var thread = document.getElementById('nav-chat-thread');
+  if (thread) thread.scrollTop = thread.scrollHeight;
+}
+
+async function navChatSend() {
+  var input = document.getElementById('nav-chat-input');
+  var sendBtn = document.getElementById('nav-chat-send-btn');
+  if (!input) return;
+  var msg = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  input.style.height = '';
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '…'; }
+
+  await navChatDispatch(msg);
+
+  if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = '▶'; }
+}
+
+function navChatQuick(msg) {
+  var input = document.getElementById('nav-chat-input');
+  if (input) { input.value = msg; }
+  navChatSend();
+}
+
+async function navAgentProactive() {
+  var btn = document.getElementById('nav-agent-proactive-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⚡ …'; }
+
+  // Build proactive analysis prompt
+  var context = renderNavAgentContext ? renderNavAgentContext() : '';
+  var prompt = 'Give me a proactive portfolio analysis. Focus on: (1) biggest misalignments vs the model, (2) top 3 action items right now, (3) any risks I should know about given the current regime. Be concise and specific with dollar amounts.';
+
+  await navChatDispatch(prompt, true); // silent=true means don't show user bubble
+
+  if (btn) { btn.disabled = false; btn.textContent = '⚡ Auto'; }
+}
+
+async function navChatDispatch(userMsg, silent) {
+  // Add user message to UI
+  if (!silent) navChatAddMessage('user', userMsg);
+
+  // Add to history
+  navChatHistory.push({role:'user', content: buildAgentPrompt(userMsg)});
+
+  // Show thinking bubble
+  var thinkingId = navChatAddMessage('agent', '', true);
+
+  try {
+    var base = (PROXY_URL||'').replace(/\/+$/, '');
+    var r = await fetch(base + '/ai', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Origin': 'https://mtc-ash.github.io'},
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: 'You are the CIO agent for MARC Strategy Lab — a macro regime-based portfolio tool. ' +
+          'You have access to the user\'s live portfolio, model weights, current regime, and market prices. ' +
+          'Be a sharp, direct financial advisor. Use specific numbers from the context. ' +
+          'Format responses with ## headers for sections. Use bullet points for action items. ' +
+          'Keep responses focused and under 400 words unless the user asks for detail.',
+        messages: navChatHistory
+      })
+    });
+
+    var d = await r.json();
+    var reply = (d.content && d.content[0] && d.content[0].text) ? d.content[0].text : 'No response received.';
+
+    // Update thinking bubble with real response
+    navChatUpdateMessage(thinkingId, reply);
+
+    // Add assistant response to history (without the context prefix, just the reply)
+    navChatHistory.push({role: 'assistant', content: reply});
+
+    // Keep history manageable (last 20 messages = 10 exchanges)
+    if (navChatHistory.length > 20) navChatHistory = navChatHistory.slice(-20);
+
+  } catch(e) {
+    navChatUpdateMessage(thinkingId, '**Error:** ' + e.message + '\n\nCheck that the Cloudflare Worker is deployed and your API keys are set.');
+  }
+}
+
+function buildAgentPrompt(userMsg) {
+  // Inject fresh portfolio context into every user message
+  var snapshot = '';
+  try {
+    var data = navLoad();
+    var positions = computePositions(data.trades);
+    var prices = data.prices || {};
+    var mw = getModelWeights ? getModelWeights() : {};
+    var totalValue = 0;
+    Object.values(positions).forEach(function(p) {
+      var cp = prices[p.asset] ? prices[p.asset].price : p.costBasis;
+      totalValue += p.qty * cp;
+    });
+
+    var regime = navState && navState.liveCoords
+      ? 'LIVE COMPUTED (X='+navState.liveCoords.x.toFixed(2)+', Y='+navState.liveCoords.y.toFixed(2)+')'
+      : 'From last backtest quarter';
+
+    var regimePill = document.getElementById('nav-regime-pill');
+    var regimeName = regimePill ? regimePill.textContent.trim() : '—';
+
+    snapshot = '[PORTFOLIO CONTEXT — ' + new Date().toLocaleString() + ']\n'
+      + 'Regime: ' + regimeName + ' | Source: ' + regime + '\n'
+      + 'NAV: $' + totalValue.toFixed(0) + '\n'
+      + 'Positions: ' + Object.keys(positions).filter(function(a){ var p=positions[a]; return p&&p.qty>0; }).map(function(a) {
+          var p = positions[a];
+          var cp = prices[a] ? prices[a].price : p.costBasis;
+          var val = p.qty * cp;
+          var pct = totalValue > 0 ? (val/totalValue*100).toFixed(1) : '0';
+          var model = mw[a] ? (mw[a].weight*100).toFixed(1) : '0';
+          return a + ': ' + pct + '% actual / ' + model + '% model';
+        }).join(', ') + '\n'
+      + 'Model weights (top 10): ' + Object.entries(mw).sort(function(a,b){return b[1].weight-a[1].weight;}).slice(0,10)
+          .map(function(e){ return e[0]+':'+( e[1].weight*100).toFixed(1)+'%'; }).join(', ')
+      + '\n\n';
+  } catch(e) {}
+
+  return snapshot + userMsg;
+}
+
+function navAgentClearChat() {
+  navChatHistory = [];
+  var thread = document.getElementById('nav-chat-thread');
+  if (!thread) return;
+  thread.innerHTML = '<div id="nav-chat-empty" style="text-align:center;padding:30px 10px;color:var(--subtle);font-size:11px;font-family:var(--mono);">Ask anything about your portfolio<br><span style="font-size:9px;opacity:.6;">or click ⚡ Auto for a proactive analysis</span></div>';
+}
+
+// Legacy: keep navRunAgent working for backward compat
+function navRunAgent() { navAgentProactive(); }
