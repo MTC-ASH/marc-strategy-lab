@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MARC — Strategy Lab v16</title>
+<title>MARC — Strategy Lab v17</title>
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -454,6 +454,89 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 .price-pill .pp-price { font-family:var(--mono);font-size:11px;font-weight:600; }
 .price-pill .pp-chg { font-family:var(--mono);font-size:9px; }
 
+
+/* ── LOGIN OVERLAY ── */
+#marc-login {
+  position:fixed;inset:0;z-index:1000;background:var(--bg);
+  display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:0;
+}
+.login-card {
+  background:var(--surface);border:1px solid var(--border2);
+  border-radius:8px;padding:40px;width:360px;
+  box-shadow:0 20px 80px rgba(0,0,0,.6);
+}
+.login-logo {
+  font-family:var(--sans);font-size:28px;font-weight:800;
+  letter-spacing:8px;color:var(--text);text-align:center;
+  margin-bottom:4px;
+}
+.login-sub {
+  text-align:center;font-size:10px;color:var(--subtle);
+  font-family:var(--mono);letter-spacing:2px;text-transform:uppercase;
+  margin-bottom:32px;
+}
+.login-field { margin-bottom:16px; }
+.login-field label {
+  display:block;font-size:9px;color:var(--subtle);
+  text-transform:uppercase;letter-spacing:1px;
+  font-family:var(--mono);margin-bottom:6px;
+}
+.login-field input {
+  width:100%;background:var(--surface2);border:1px solid var(--border);
+  border-radius:4px;color:var(--text);font-family:var(--mono);
+  font-size:13px;padding:10px 12px;outline:none;
+  transition:border-color .15s;box-sizing:border-box;
+}
+.login-field input:focus { border-color:var(--green); }
+.login-btn {
+  width:100%;padding:11px;background:var(--green);color:#000;
+  border:none;border-radius:4px;font-family:var(--sans);
+  font-size:13px;font-weight:700;cursor:pointer;margin-top:8px;
+  transition:opacity .15s;
+}
+.login-btn:hover:not(:disabled){opacity:.85;}
+.login-btn:disabled{opacity:.4;cursor:not-allowed;}
+.login-err {
+  margin-top:12px;padding:8px 12px;background:var(--red-dim);
+  border:1px solid var(--red);border-radius:4px;
+  font-size:11px;color:var(--red);font-family:var(--mono);
+  display:none;
+}
+
+/* ── FUND SELECTOR ── */
+#fund-selector {
+  display:flex;align-items:center;gap:6px;
+  padding:0 14px;border-right:1px solid var(--border);
+  height:100%;flex-shrink:0;
+}
+.fund-tab {
+  padding:4px 12px;border-radius:3px;font-size:11px;font-weight:600;
+  cursor:pointer;border:1px solid transparent;transition:all .15s;
+  font-family:var(--sans);
+}
+.fund-tab.active-live {
+  background:var(--green-dim);color:var(--green);
+  border-color:var(--green-mid);
+}
+.fund-tab.active-experimental {
+  background:var(--amber-dim);color:var(--amber);
+  border-color:#6B4400;
+}
+.fund-tab.inactive {
+  background:var(--surface2);color:var(--muted);
+  border-color:var(--border);
+}
+.fund-tab.inactive:hover { border-color:var(--border2);color:var(--text); }
+
+/* Experimental mode banner */
+#exp-banner {
+  display:none;background:var(--amber-dim);border-bottom:2px solid var(--amber);
+  padding:4px 14px;font-family:var(--mono);font-size:10px;color:var(--amber);
+  letter-spacing:1px;text-align:center;flex-shrink:0;
+}
+#exp-banner.visible { display:block; }
+
 </style>
 </head>
 <body>
@@ -462,7 +545,8 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 <!-- ══ TOPBAR ══ -->
 <div id="topbar">
   <div class="logo">MARC</div>
-  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v16</span>
+  <div id="fund-tabs" style="display:flex;align-items:center;gap:4px;padding:0 10px;border-right:1px solid var(--border);flex-shrink:0;"></div>
+  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v17</span>
   <div class="ts"><div class="ts-l">Total Return</div><div class="ts-v g" id="ts-total">—</div></div>
   <div class="ts"><div class="ts-l">CAGR</div><div class="ts-v g" id="ts-cagr">—</div></div>
   <div class="ts"><div class="ts-l">Sharpe</div><div class="ts-v b" id="ts-sharpe">—</div></div>
@@ -846,7 +930,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
           <div><div class="nav-rc-label">PCE YoY%</div><input type="number" id="nav-rc-pce" class="nav-rc-input" placeholder="2.4" step="0.01"/></div>
         </div>
         <div style="display:flex;gap:5px;margin-bottom:6px;">
-          <button id="nav-macro-btn" onclick="navFetchMacro()" style="flex:1;padding:6px;background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);border-radius:3px;font-size:10px;font-weight:700;cursor:pointer;">↻ Auto-fill from FRED</button>
+          <button id="nav-fred-btn" onclick="navAutoFillFRED()" style="flex:1;padding:6px;background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);border-radius:3px;font-size:10px;font-weight:700;cursor:pointer;">↻ Auto-fill from FRED</button>
           <button onclick="navComputeRegime()" style="flex:1;padding:6px;background:var(--amber);color:#000;border:none;border-radius:3px;font-size:10px;font-weight:700;cursor:pointer;">↻ Compute</button>
         </div>
         <div id="nav-macro-source" style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:4px;">PMI must be entered manually (not on FRED)</div>
@@ -1033,8 +1117,37 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 </div>
 
 
-<script src="marc_data.js?v=16"></script>
-<script src="marc_app.js?v=16"></script>
-<script src="marc_nav.js?v=16"></script>
+
+<!-- ════ LOGIN OVERLAY ════ -->
+<div id="marc-login">
+  <div class="login-card">
+    <div class="login-logo">MARC</div>
+    <div class="login-sub">Strategy Lab · Portfolio Manager</div>
+    <div class="login-field">
+      <label>Email</label>
+      <input type="email" id="login-email" placeholder="team@fund.com" autocomplete="email"/>
+    </div>
+    <div class="login-field">
+      <label>Password</label>
+      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password"
+        onkeydown="if(event.key==='Enter')doLogin()"/>
+    </div>
+    <button class="login-btn" onclick="doLogin()" id="login-btn">Sign In</button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
+
+<!-- ════ FUND SELECTOR (injected into topbar) ════ -->
+<div id="fund-selector" style="display:none;">
+  <!-- Populated by JS after login -->
+</div>
+
+<!-- Experimental mode banner (inside workspace) -->
+<div id="exp-banner">⚠ EXPERIMENTAL MODE — Trades are paper only and not reflected in Live Fund</div>
+
+
+<script src="marc_data.js?v=17"></script>
+<script src="marc_app.js?v=17"></script>
+<script src="marc_nav.js?v=17"></script>
 </body>
 </html>
