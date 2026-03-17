@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MARC — Strategy Lab v7</title>
+<title>MARC — Strategy Lab v8</title>
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -181,7 +181,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 <!-- ══ TOPBAR ══ -->
 <div id="topbar">
   <div class="logo">MARC</div>
-  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v7</span>
+  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v8</span>
   <div class="ts"><div class="ts-l">Total Return</div><div class="ts-v g" id="ts-total">—</div></div>
   <div class="ts"><div class="ts-l">CAGR</div><div class="ts-v g" id="ts-cagr">—</div></div>
   <div class="ts"><div class="ts-l">Sharpe</div><div class="ts-v b" id="ts-sharpe">—</div></div>
@@ -297,6 +297,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
     <div class="tab-btn" onclick="showTab('map')">Regime Map</div>
     <div class="tab-btn" onclick="showTab('sensitivity')">Sensitivity</div>
     <div class="tab-btn" onclick="showTab('portfolio')" style="color:var(--green);">⬡ Portfolio</div>
+    <div class="tab-btn" onclick="showTab('regime-calc')" style="color:var(--amber);">⌖ Regime Calc</div>
   </div>
 
   <!-- ── MAIN TAB ── -->
@@ -439,6 +440,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
       <span id="port-regime-coord" style="font-family:var(--mono);font-size:10px;color:var(--muted);">(—, —)</span>
       <span style="font-size:9px;color:var(--subtle);">· model portfolio at current α / N / β</span>
       <div style="margin-left:auto;display:flex;gap:6px;">
+        <button onclick="exportForAgent()" id="agent-btn" style="font-size:9px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--green);color:var(--green);padding:3px 9px;border-radius:2px;cursor:pointer;font-weight:600;">⬡ Copy for Agent</button>
         <button onclick="exportPortfolioJSON()" style="font-size:9px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 9px;border-radius:2px;cursor:pointer;">↓ Export JSON</button>
         <button onclick="copyPortfolioCSV()" id="csv-btn" style="font-size:9px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 9px;border-radius:2px;cursor:pointer;">⎘ Copy CSV</button>
       </div>
@@ -472,6 +474,81 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
           <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">Summary</div>
           <div id="port-stats-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:5px;"></div>
         </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ── REGIME CALCULATOR TAB ── -->
+  <div class="tab-pane" id="tab-regime-calc">
+    <div style="padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">Macro Regime Calculator</span>
+      <span style="font-size:9px;color:var(--subtle);">· mirrors the Excel model exactly · enter indicators to compute X/Y scores and regime</span>
+      <button onclick="computeRegimeCalc()" style="margin-left:auto;font-size:10px;background:var(--amber-dim);border:1px solid var(--amber);color:var(--amber);padding:4px 12px;border-radius:2px;cursor:pointer;font-family:var(--sans);font-weight:700;">↻ Compute</button>
+    </div>
+    <div style="display:flex;height:calc(100% - 42px);overflow:hidden;">
+      <!-- Inputs -->
+      <div style="width:300px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:auto;padding:14px;">
+        <div style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:12px;padding-bottom:4px;border-bottom:1px solid var(--border);">Growth Indicators (→ X Score)</div>
+        <div style="margin-bottom:10px;">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">GDP QoQ% <span style="color:var(--subtle);font-size:9px;">e.g. 0.007 = 0.7%</span></div>
+          <input type="number" id="rc-gdp" step="0.0001" placeholder="0.007" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
+          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(GDP×100−1)×3))</div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">ISM PMI <span style="color:var(--subtle);font-size:9px;">manufacturing index</span></div>
+          <input type="number" id="rc-pmi" step="0.1" placeholder="52.4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
+          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(PMI−50)×0.65))</div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">Unemployment % <span style="color:var(--subtle);font-size:9px;">e.g. 4.1</span></div>
+          <input type="number" id="rc-unemp" step="0.1" placeholder="4.1" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
+          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(U−4.5)×2.8×−1))</div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">US Retail Sales MoM% <span style="color:var(--subtle);font-size:9px;">e.g. 0.3</span></div>
+          <input type="number" id="rc-retail" step="0.1" placeholder="0.3" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
+          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(R−0.3)×2))</div>
+        </div>
+        <div style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:12px;padding-bottom:4px;border-bottom:1px solid var(--border);">Inflation Indicators (→ Y Score)</div>
+        <div style="margin-bottom:10px;">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">CPI YoY% <span style="color:var(--subtle);font-size:9px;">e.g. 2.4</span></div>
+          <input type="number" id="rc-cpi" step="0.01" placeholder="2.4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
+          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(CPI−2.5)×2))</div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">PCE YoY% <span style="color:var(--subtle);font-size:9px;">e.g. 2.4</span></div>
+          <input type="number" id="rc-pce" step="0.01" placeholder="2.4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
+          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(PCE−2)×2))</div>
+        </div>
+        <button onclick="computeRegimeCalc()" style="width:100%;padding:9px;background:var(--amber);color:#000;border:none;border-radius:3px;font-family:var(--sans);font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.5px;">↻ Compute Regime</button>
+        <div style="margin-top:8px;font-size:9px;color:var(--subtle);text-align:center;">X Score = (GDP×2 + PMI×3 + Unemp×2 + Retail×1) / 8<br>Y Score = (CPI×3 + PCE×2) / 5</div>
+      </div>
+      <!-- Results -->
+      <div style="flex:1;overflow-y:auto;padding:14px;">
+        <div id="rc-result" style="display:none;">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;">
+              <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">X Score (Growth)</div>
+              <div id="rc-x" style="font-family:var(--mono);font-size:24px;font-weight:500;">—</div>
+            </div>
+            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;">
+              <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Y Score (Inflation)</div>
+              <div id="rc-y" style="font-family:var(--mono);font-size:24px;font-weight:500;">—</div>
+            </div>
+            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;">
+              <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Regime</div>
+              <div id="rc-quadrant" style="font-size:18px;font-weight:700;">—</div>
+            </div>
+          </div>
+          <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">Indicator Breakdown</div>
+          <div id="rc-breakdown" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;font-family:var(--mono);font-size:10px;line-height:1.8;"></div>
+          <div style="margin-top:12px;">
+            <button onclick="applyRegimeToPortfolio()" style="font-size:10px;background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:6px 14px;border-radius:2px;cursor:pointer;font-family:var(--sans);font-weight:600;">→ Apply to Portfolio Tab</button>
+            <span style="font-size:9px;color:var(--subtle);margin-left:10px;">Uses these coords to show current model portfolio</span>
+          </div>
+        </div>
+        <div id="rc-empty" style="color:var(--subtle);font-size:11px;padding:20px 0;">Enter indicator values and click Compute to see the regime.</div>
       </div>
     </div>
   </div>
