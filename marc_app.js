@@ -74,6 +74,130 @@ function filterByDates(results, ma) {
 }
 
 // ═══════════════════════════════════════
+// MARC AGENT PANEL
+// ═══════════════════════════════════════
+function buildAgentSnapshot(){
+  const q=getCurrentRegimeCoords(); if(!q) return '—';
+  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
+  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
+  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
+  const today=new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+  return [
+    'MARC SNAPSHOT — '+today,
+    'REGIME: '+q.quadrant,
+    'Growth (X): '+q.rx.toFixed(4)+' | Inflation (Y): '+q.ry.toFixed(4),
+    'Alpha: '+params.alpha+' | N: '+Math.round(params.n)+' | mcBeta: '+params.mcbeta,
+    '',
+    'MODEL PORTFOLIO:',
+    ...holdings.map(h=>h.asset+': '+(h.weight*100).toFixed(1)+'%')
+  ].join('\n');
+}
+
+function openAgentPanel(){
+  const snapshot=buildAgentSnapshot();
+  const box=document.getElementById('agent-snapshot-box');
+  if(box) box.textContent=snapshot;
+  // Restore saved API key if present
+  const savedKey=sessionStorage.getItem('marc_agent_key');
+  if(savedKey){
+    const inp=document.getElementById('agent-api-key');
+    if(inp) inp.value=savedKey;
+  }
+  document.getElementById('agent-panel').classList.add('open');
+}
+
+function closeAgentPanel(){
+  document.getElementById('agent-panel').classList.remove('open');
+}
+
+// Also keep exportForAgent for backward compat (now opens panel)
+function exportForAgent(){ openAgentPanel(); }
+
+async function runMarcAgent(){
+  const apiKey=document.getElementById('agent-api-key').value.trim();
+  const context=document.getElementById('agent-context').value.trim();
+  const actualHoldings=document.getElementById('agent-holdings').value.trim();
+
+  if(!apiKey) return alert('Please enter your Anthropic API key.');
+
+  // Save key for session
+  sessionStorage.setItem('marc_agent_key', apiKey);
+
+  const snapshot=buildAgentSnapshot();
+  const btn=document.getElementById('agent-run-btn');
+  const output=document.getElementById('agent-output');
+  const wrap=document.getElementById('agent-output-wrap');
+  const ts=document.getElementById('agent-ts');
+
+  btn.disabled=true; btn.textContent='Analysing…';
+  wrap.style.display='block';
+  output.className='thinking';
+  output.textContent='Reading your portfolio against the regime framework…';
+  ts.textContent='';
+
+  const systemPrompt=`You are the MARC portfolio agent. MARC classifies the economy into four macro regime quadrants:
+
+• Expansion  (X≥0, Y<0)  — high growth, low inflation → favour: equities, growth assets, crypto
+• Stagflation (X<0,  Y≥0)  — low growth, high inflation → favour: gold, commodities, energy, short bonds
+• Reflation  (X≥0, Y≥0)  — rising growth+inflation  → favour: equities, real assets, commodities
+• Deflation  (X<0,  Y<0)  — low growth, low inflation  → favour: long bonds, cash, defensives
+
+X = Growth score (weighted avg of GDP, PMI, Unemployment, Retail Sales)
+Y = Inflation score (weighted avg of CPI, PCE)
+
+Your job:
+1. Clearly state whether the portfolio is aligned or misaligned with the regime
+2. Identify the TOP 3 misalignments — assets over or underweight for the regime
+3. Give specific actionable rebalancing steps with target % changes
+4. Note risk concentration or sector issues
+5. Flag anything concerning
+
+Rules:
+- Be direct and specific. Use numbers.
+- Format with these exact section headers:
+  REGIME ALIGNMENT
+  TOP MISALIGNMENTS
+  RECOMMENDED ACTIONS
+  RISK FLAGS`;
+
+  const holdingsSection=actualHoldings
+    ? ('\nYour actual current holdings:\n'+actualHoldings+'\n\nCompare these against the model portfolio and identify the delta.')
+    : '\nNo actual holdings provided \u2014 analyse the model portfolio as the target allocation.';
+
+  const userMessage=snapshot+holdingsSection+(context?'\n\nAdditional context: '+context:'');
+
+  try {
+    const response=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':apiKey,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-allow-browser':'true'
+      },
+      body:JSON.stringify({
+        model:'claude-sonnet-4-6',
+        max_tokens:1200,
+        system:systemPrompt,
+        messages:[{role:'user',content:userMessage}]
+      })
+    });
+
+    const data=await response.json();
+    if(data.error) throw new Error(data.error.message);
+
+    const text=data.content[0].text;
+    output.className='';
+    output.textContent=text;
+    ts.textContent='Analysed at '+new Date().toLocaleTimeString();
+  } catch(err){
+    output.className='error';
+    output.textContent='⚠ Error: '+err.message+'\n\nCommon causes:\n• API key wrong or expired\n• No API credits (check console.anthropic.com)\n• Network issue';
+  }
+  btn.disabled=false; btn.textContent='▶ Run Analysis';
+}
+
+// ═══════════════════════════════════════
 // INIT UI
 // ═══════════════════════════════════════
 function initAssetConstraints() {
