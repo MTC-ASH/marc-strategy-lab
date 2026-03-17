@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MARC — Strategy Lab v15</title>
+<title>MARC — Strategy Lab v16</title>
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -386,6 +386,16 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 .nav-model-bar-wrap { width:54px;height:3px;background:var(--surface3,#1A1A28);border-radius:2px;overflow:hidden;flex-shrink:0; }
 .nav-model-bar { height:100%;border-radius:2px; }
 .nav-model-pct { font-family:var(--mono);font-size:10px;min-width:36px;text-align:right;flex-shrink:0; }
+/* Drawer */
+#nav-section { position:fixed; }
+.nav-columns { position:relative; }
+.nav-tlog-row { border-bottom:1px solid var(--border); }
+.nav-tlog-row:hover td { background:var(--surface2); }
+/* Price ticker pills */
+.price-pill { display:inline-flex;align-items:center;gap:5px;padding:4px 9px;margin-right:5px;background:var(--surface3,#1A1A28);border:1px solid var(--border);border-radius:3px;vertical-align:top;flex-shrink:0; }
+.price-pill .pp-name { font-size:10px;font-weight:600;color:var(--text); }
+.price-pill .pp-price { font-family:var(--mono);font-size:11px;font-weight:600; }
+.price-pill .pp-chg { font-family:var(--mono);font-size:9px; }
 
 </style>
 </head>
@@ -395,7 +405,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 <!-- ══ TOPBAR ══ -->
 <div id="topbar">
   <div class="logo">MARC</div>
-  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v15</span>
+  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v16</span>
   <div class="ts"><div class="ts-l">Total Return</div><div class="ts-v g" id="ts-total">—</div></div>
   <div class="ts"><div class="ts-l">CAGR</div><div class="ts-v g" id="ts-cagr">—</div></div>
   <div class="ts"><div class="ts-l">Sharpe</div><div class="ts-v b" id="ts-sharpe">—</div></div>
@@ -738,10 +748,13 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
     <div class="nav-kpi-cell"><div class="ts-l">Return</div><div class="ts-v" id="nav-kpi-ret">—</div></div>
     <div class="nav-kpi-cell"><div class="ts-l">Model Drift</div><div class="ts-v a" id="nav-kpi-drift">—</div></div>
     <div class="nav-kpi-cell"><div class="ts-l">Positions</div><div class="ts-v b" id="nav-kpi-pos">—</div></div>
+    <div class="nav-kpi-cell"><div class="ts-l">MTD</div><div class="ts-v" id="nav-kpi-mtd">—</div></div>
+    <div class="nav-kpi-cell"><div class="ts-l">YTD</div><div class="ts-v" id="nav-kpi-ytd">—</div></div>
     <div class="nav-kpi-cell" style="border-right:none;"><div class="ts-l">Prices updated</div><div class="ts-v" id="nav-kpi-updated" style="font-size:10px;color:var(--muted);">—</div></div>
     <div style="margin-left:auto;display:flex;gap:6px;padding:0 12px;flex-shrink:0;">
       <button id="nav-price-btn" onclick="navFetchPrices()" style="font-size:10px;font-family:var(--mono);background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);padding:3px 10px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.3px;">↻ Refresh Prices</button>
       <button onclick="navOpenTradeModal()" style="font-size:10px;font-family:var(--mono);background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:3px 10px;border-radius:2px;cursor:pointer;font-weight:700;">+ Trade</button>
+      <button id="nav-tradelog-btn" onclick="toggleTradeLog()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 10px;border-radius:2px;cursor:pointer;">≡ Trade Log</button>
       <button onclick="navExport()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 10px;border-radius:2px;cursor:pointer;">↓ Export</button>
       <button onclick="navClear()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--red);padding:3px 10px;border-radius:2px;cursor:pointer;">✕ Clear</button>
       <button onclick="showNavSection()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 10px;border-radius:2px;cursor:pointer;">← Back</button>
@@ -775,7 +788,11 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
           <div><div class="nav-rc-label">CPI YoY%</div><input type="number" id="nav-rc-cpi" class="nav-rc-input" placeholder="2.4" step="0.01"/></div>
           <div><div class="nav-rc-label">PCE YoY%</div><input type="number" id="nav-rc-pce" class="nav-rc-input" placeholder="2.4" step="0.01"/></div>
         </div>
-        <button onclick="navComputeRegime()" style="width:100%;padding:7px;background:var(--amber);color:#000;border:none;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:.3px;">↻ Compute Regime</button>
+        <div style="display:flex;gap:5px;margin-bottom:6px;">
+          <button id="nav-macro-btn" onclick="navFetchMacro()" style="flex:1;padding:6px;background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);border-radius:3px;font-size:10px;font-weight:700;cursor:pointer;">↻ Auto-fill from FRED</button>
+          <button onclick="navComputeRegime()" style="flex:1;padding:6px;background:var(--amber);color:#000;border:none;border-radius:3px;font-size:10px;font-weight:700;cursor:pointer;">↻ Compute</button>
+        </div>
+        <div id="nav-macro-source" style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:4px;">PMI must be entered manually (not on FRED)</div>
         <div id="nav-rc-result"></div>
       </div>
 
@@ -827,11 +844,13 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
         </table>
       </div>
 
-      <!-- Trade log at bottom -->
-      <div style="height:140px;border-top:1px solid var(--border);flex-shrink:0;overflow-y:auto;background:var(--surface);" id="nav-trade-log">
-        <div style="padding:5px 12px;border-bottom:1px solid var(--border);background:var(--surface2);">
-          <span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">Trade Log</span>
+      <!-- All assets price ticker -->
+      <div style="height:100px;border-top:1px solid var(--border);flex-shrink:0;overflow:hidden;background:var(--surface2);">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 12px;border-bottom:1px solid var(--border);">
+          <span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">All Asset Prices</span>
+          <span style="font-size:9px;color:var(--subtle);font-family:var(--mono);">● live  ○ stale</span>
         </div>
+        <div style="overflow-x:auto;overflow-y:hidden;white-space:nowrap;padding:6px 8px;" id="nav-price-ticker"></div>
       </div>
     </div>
 
@@ -867,6 +886,33 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
       <div style="flex:1;overflow-y:auto;padding:12px;">
         <div id="nav-agent-output" style="display:none;"></div>
       </div>
+    </div>
+  </div>
+  <!-- Trade Log Drawer (slides up from bottom) -->
+  <div id="nav-tradelog-drawer" style="position:absolute;bottom:0;left:0;right:0;height:55%;background:var(--surface);border-top:2px solid var(--green);transform:translateY(100%);transition:transform .25s ease;z-index:10;display:flex;flex-direction:column;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface2);">
+      <span style="font-size:11px;font-weight:600;">Trade Log</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span id="nav-tradelog-count" style="font-family:var(--mono);font-size:10px;color:var(--muted);"></span>
+        <button onclick="toggleTradeLog()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0 4px;line-height:1;">✕</button>
+      </div>
+    </div>
+    <div style="flex:1;overflow-y:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead>
+          <tr style="background:var(--surface2);">
+            <th style="padding:6px 12px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Asset</th>
+            <th style="padding:6px 12px;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Dir</th>
+            <th style="padding:6px 12px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Qty</th>
+            <th style="padding:6px 12px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Price</th>
+            <th style="padding:6px 12px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Total</th>
+            <th style="padding:6px 12px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Date</th>
+            <th style="padding:6px 12px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Notes</th>
+            <th style="padding:6px 12px;position:sticky;top:0;background:var(--surface2);border-bottom:1px solid var(--border);"></th>
+          </tr>
+        </thead>
+        <tbody id="nav-tradelog-body"></tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -919,8 +965,8 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 </div>
 
 
-<script src="marc_data.js?v=15"></script>
-<script src="marc_app.js?v=15"></script>
-<script src="marc_nav.js?v=15"></script>
+<script src="marc_data.js?v=16"></script>
+<script src="marc_app.js?v=16"></script>
+<script src="marc_nav.js?v=16"></script>
 </body>
 </html>
