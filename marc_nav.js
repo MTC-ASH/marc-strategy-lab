@@ -120,14 +120,14 @@ function renderNavRegimePanel() {
   }
   var TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00D68F'};
   mList.innerHTML = sorted.map(function(h,i) {
-    var barW = Math.round(h.weight * 100);
-    return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">'
-      +'<span style="font-family:var(--mono);font-size:9px;color:var(--subtle);width:14px;text-align:right;">'+(i+1)+'</span>'
-      +'<span style="font-size:10px;font-weight:600;flex:1;">' + h.asset + '</span>'
-      +'<div style="width:50px;height:3px;background:var(--surface3);border-radius:2px;overflow:hidden;">'
-      +'<div style="height:100%;width:'+barW+'%;background:'+(TC[h.type]||'#888')+';border-radius:2px;"></div>'
-      +'</div>'
-      +'<span style="font-family:var(--mono);font-size:10px;color:'+(TC[h.type]||'#888');+';min-width:34px;text-align:right;">'+(h.weight*100).toFixed(1)+'%</span>'
+    var barW = Math.min(100, Math.round(h.weight * 100 * 3));
+    var tc = TC[h.type]||'#888';
+    return '<div class="nav-model-row">'
+      +'<span class="nav-model-rank">'+(i+1)+'</span>'
+      +'<span class="nav-model-name">'+h.asset+'</span>'
+      +'<span style="font-size:9px;color:'+tc+';font-family:var(--mono);margin-right:4px;">'+h.type.slice(0,3)+'</span>'
+      +'<div class="nav-model-bar-wrap"><div class="nav-model-bar" style="width:'+barW+'%;background:'+tc+';"></div></div>'
+      +'<span class="nav-model-pct" style="color:'+tc+';">'+(h.weight*100).toFixed(1)+'%</span>'
       +'</div>';
   }).join('');
 }
@@ -252,9 +252,10 @@ function renderNavDashboard() {
           +(type?'<span class="badge badge-'+type+'" style="margin-left:4px;">'+type.slice(0,3)+'</span>':'')+'</td>'
           +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">'+(r.hasPos?navFmtQty(r.p.qty):'—')+'</td>'
           +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">'+(r.hasPos?'$'+r.p.costBasis.toFixed(2):'—')+'</td>'
-          +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;">'
-          +'<span style="font-size:9px;color:'+(r.hasLive?'var(--green)':'var(--subtle)')+';">●</span> '
-          +navFmt$(r.cp)+'</td>'
+          +'<td style="padding:5px 10px;"><div class="live-price">'
+          +'<span class="live-dot '+(r.hasLive?'live':'stale')+'"></span>'
+          +'<span style="font-family:var(--mono);font-size:12px;font-weight:600;color:'+(r.hasLive?'var(--text)':'var(--muted)')+';">'+(r.hasPos||r.hasLive?navFmt$(r.cp):'—')+'</span>'
+          +'</div></td>'
           +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:'+cc+';">'
           +(r.c24!=null?(r.c24>=0?'+':'')+r.c24.toFixed(2)+'%':'—')+'</td>'
           +'<td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;">'+(r.hasPos?navFmt$(r.value):'—')+'</td>'
@@ -344,12 +345,13 @@ function renderNavCharts(rows, totalValue) {
 function renderNavTradeLog(trades) {
   var el = document.getElementById('nav-trade-log');
   if (!el) return;
+  var header = '<div style="padding:5px 12px;border-bottom:1px solid var(--border);background:var(--surface2);position:sticky;top:0;"><span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">Trade Log</span></div>';
   if (!trades.length) {
-    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--subtle);font-size:10px;font-family:var(--mono);">No trades yet</div>';
+    el.innerHTML = header + '<div style="padding:20px;text-align:center;color:var(--subtle);font-size:10px;font-family:var(--mono);">No trades yet — click + Trade</div>';
     return;
   }
   var sorted = trades.slice().sort(function(a,b){return b.ts-a.ts;});
-  el.innerHTML = sorted.map(function(t) {
+  el.innerHTML = header + sorted.map(function(t) {
     var dc = t.direction==='buy'?'var(--green)':'var(--red)';
     var db = t.direction==='buy'?'var(--green-dim)':'var(--red-dim)';
     return '<div style="padding:7px 12px;border-bottom:1px solid var(--border);">'
