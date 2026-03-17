@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MARC — Strategy Lab v14</title>
+<title>MARC — Strategy Lab v15</title>
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -296,9 +296,27 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
   position:fixed;inset:0;top:48px;z-index:200;
   display:none;flex-direction:column;background:var(--bg);
 }
-#nav-section.open { display:flex; }
+.nav-topbar {
+  display:flex;align-items:center;gap:0;
+  background:var(--surface);border-bottom:1px solid var(--border);
+  flex-shrink:0;height:44px;overflow-x:auto;
+}
+.nav-kpi-cell {
+  padding:0 16px;border-right:1px solid var(--border);
+  height:100%;display:flex;flex-direction:column;
+  justify-content:center;flex-shrink:0;min-width:90px;
+}
+.nav-kpi-cell .ts-l { font-size:9px;color:var(--subtle);letter-spacing:.5px;text-transform:uppercase;font-family:var(--mono);margin-bottom:1px; }
+.nav-kpi-cell .ts-v { font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text); }
+.nav-kpi-cell .ts-v.b { color:var(--green); }
+.nav-kpi-cell .ts-v.g { color:var(--green); }
+.nav-kpi-cell .ts-v.r { color:var(--red); }
+.nav-kpi-cell .ts-v.a { color:var(--amber); }
+.nav-columns {
+  display:flex;flex:1;min-height:0;overflow:hidden;
+}
 .nav-col-left {
-  width:260px;flex-shrink:0;background:var(--surface);
+  width:280px;flex-shrink:0;background:var(--surface);
   border-right:1px solid var(--border);
   display:flex;flex-direction:column;overflow-y:auto;
 }
@@ -306,23 +324,45 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
   flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;
 }
 .nav-col-right {
-  width:300px;flex-shrink:0;background:var(--surface);
+  width:320px;flex-shrink:0;background:var(--surface);
   border-left:1px solid var(--border);
   display:flex;flex-direction:column;overflow:hidden;
 }
-.nav-panel-title {
+.nav-section-title {
   font-size:9px;color:var(--subtle);letter-spacing:1px;
   text-transform:uppercase;font-family:var(--mono);
-  padding:8px 12px;border-bottom:1px solid var(--border);
+  padding:7px 12px;border-bottom:1px solid var(--border);
   background:var(--surface2);flex-shrink:0;
   display:flex;align-items:center;justify-content:space-between;
 }
+.nav-rc-row { display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px; }
+.nav-rc-label { font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:3px; }
 .nav-rc-input {
   font-family:var(--mono);font-size:11px;background:var(--surface2);
   border:1px solid var(--border);color:var(--text);
-  padding:4px 7px;border-radius:2px;width:100%;
+  padding:5px 8px;border-radius:2px;width:100%;box-sizing:border-box;
 }
-.nav-rc-input:focus { outline:none;border-color:var(--amber); }
+.nav-rc-input:focus { outline:none;border-color:var(--amber);background:var(--bg); }
+/* Live price indicator */
+.live-dot { display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;flex-shrink:0; }
+.live-dot.live { background:var(--green);box-shadow:0 0 4px var(--green); }
+.live-dot.stale { background:var(--subtle); }
+/* Holdings table */
+.nav-table { width:100%;border-collapse:collapse;font-size:11px; }
+.nav-table th {
+  padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);
+  letter-spacing:.8px;text-transform:uppercase;border-bottom:1px solid var(--border);
+  font-family:var(--mono);font-weight:400;position:sticky;top:0;
+  background:var(--surface2);white-space:nowrap;
+}
+.nav-table th:first-child { text-align:left; }
+.nav-table td { padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);vertical-align:middle; }
+.nav-table td:first-child { text-align:left; }
+.nav-table tr:hover td { background:var(--surface2); }
+.nav-table .live-price { display:flex;align-items:center;justify-content:flex-end;gap:4px;font-family:var(--mono);font-weight:600; }
+.nav-table .pnl-cell { line-height:1.3; }
+.nav-table .pnl-pct { font-size:9px;opacity:.8; }
+/* Agent output */
 @keyframes navPulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 #nav-agent-output { font-size:11px;line-height:1.75;color:var(--text);font-family:var(--sans); }
 #nav-agent-output h2 {
@@ -336,9 +376,16 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 #nav-agent-output ul,#nav-agent-output ol { margin:3px 0 7px 14px; }
 #nav-agent-output li { margin-bottom:2px; }
 #nav-agent-output table { width:100%;border-collapse:collapse;margin:6px 0;font-size:10px;font-family:var(--mono); }
-#nav-agent-output th { padding:3px 7px;background:var(--surface2);color:var(--subtle);font-size:9px;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--border);font-weight:400; }
+#nav-agent-output th { padding:3px 7px;background:var(--surface2);color:var(--subtle);font-size:9px;text-transform:uppercase;border-bottom:1px solid var(--border);font-weight:400; }
 #nav-agent-output td { padding:3px 7px;border-bottom:1px solid var(--border);color:var(--text); }
 #nav-agent-output code { font-family:var(--mono);font-size:10px;background:var(--surface2);padding:1px 4px;border-radius:2px;color:var(--green); }
+/* Model list */
+.nav-model-row { display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border); }
+.nav-model-rank { font-family:var(--mono);font-size:9px;color:var(--subtle);width:16px;text-align:right;flex-shrink:0; }
+.nav-model-name { font-size:11px;font-weight:600;flex:1; }
+.nav-model-bar-wrap { width:54px;height:3px;background:var(--surface3,#1A1A28);border-radius:2px;overflow:hidden;flex-shrink:0; }
+.nav-model-bar { height:100%;border-radius:2px; }
+.nav-model-pct { font-family:var(--mono);font-size:10px;min-width:36px;text-align:right;flex-shrink:0; }
 
 </style>
 </head>
@@ -348,7 +395,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 <!-- ══ TOPBAR ══ -->
 <div id="topbar">
   <div class="logo">MARC</div>
-  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v14</span>
+  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v15</span>
   <div class="ts"><div class="ts-l">Total Return</div><div class="ts-v g" id="ts-total">—</div></div>
   <div class="ts"><div class="ts-l">CAGR</div><div class="ts-v g" id="ts-cagr">—</div></div>
   <div class="ts"><div class="ts-l">Sharpe</div><div class="ts-v b" id="ts-sharpe">—</div></div>
@@ -680,169 +727,144 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 <!-- ════ NAV SECTION ════ -->
 <div id="nav-section">
 
-  <!-- NAV topbar -->
-  <div style="display:flex;align-items:center;gap:0;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;height:42px;">
-    <div style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;align-items:center;gap:10px;">
-      <span style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--green);">◈ MARC NAV</span>
-      <span style="font-size:9px;color:var(--subtle);">forward portfolio layer</span>
+  <!-- KPI topbar -->
+  <div class="nav-topbar">
+    <div style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;align-items:center;gap:8px;flex-shrink:0;">
+      <span style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--green);">◈ NAV</span>
+      <span style="font-size:9px;color:var(--subtle);font-family:var(--mono);">live portfolio</span>
     </div>
-    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
-      <div class="ts-l">NAV</div><div class="ts-v b" id="nav-kpi-nav">—</div>
-    </div>
-    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
-      <div class="ts-l">P&amp;L</div><div class="ts-v" id="nav-kpi-pnl">—</div>
-    </div>
-    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
-      <div class="ts-l">Return</div><div class="ts-v" id="nav-kpi-ret">—</div>
-    </div>
-    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
-      <div class="ts-l">vs Model</div><div class="ts-v a" id="nav-kpi-drift">—</div>
-    </div>
-    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
-      <div class="ts-l">Positions</div><div class="ts-v b" id="nav-kpi-pos">—</div>
-    </div>
-    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
-      <div class="ts-l">Updated</div><div class="ts-v" id="nav-kpi-updated" style="font-size:10px;">—</div>
-    </div>
-    <div style="margin-left:auto;display:flex;gap:6px;padding:0 12px;">
-      <button id="nav-price-btn" onclick="navFetchPrices()" style="font-size:10px;font-family:var(--mono);background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);padding:3px 9px;border-radius:2px;cursor:pointer;font-weight:700;">↻ Prices</button>
-      <button onclick="navOpenTradeModal()" style="font-size:10px;font-family:var(--mono);background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:3px 9px;border-radius:2px;cursor:pointer;font-weight:700;">+ Trade</button>
-      <button onclick="navExport()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 9px;border-radius:2px;cursor:pointer;">↓ Export</button>
-      <button onclick="navClear()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--red);padding:3px 9px;border-radius:2px;cursor:pointer;">✕ Clear</button>
-      <button onclick="showNavSection()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 9px;border-radius:2px;cursor:pointer;">← Back</button>
+    <div class="nav-kpi-cell"><div class="ts-l">Portfolio NAV</div><div class="ts-v b" id="nav-kpi-nav">—</div></div>
+    <div class="nav-kpi-cell"><div class="ts-l">Total P&amp;L</div><div class="ts-v" id="nav-kpi-pnl">—</div></div>
+    <div class="nav-kpi-cell"><div class="ts-l">Return</div><div class="ts-v" id="nav-kpi-ret">—</div></div>
+    <div class="nav-kpi-cell"><div class="ts-l">Model Drift</div><div class="ts-v a" id="nav-kpi-drift">—</div></div>
+    <div class="nav-kpi-cell"><div class="ts-l">Positions</div><div class="ts-v b" id="nav-kpi-pos">—</div></div>
+    <div class="nav-kpi-cell" style="border-right:none;"><div class="ts-l">Prices updated</div><div class="ts-v" id="nav-kpi-updated" style="font-size:10px;color:var(--muted);">—</div></div>
+    <div style="margin-left:auto;display:flex;gap:6px;padding:0 12px;flex-shrink:0;">
+      <button id="nav-price-btn" onclick="navFetchPrices()" style="font-size:10px;font-family:var(--mono);background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);padding:3px 10px;border-radius:2px;cursor:pointer;font-weight:700;letter-spacing:.3px;">↻ Refresh Prices</button>
+      <button onclick="navOpenTradeModal()" style="font-size:10px;font-family:var(--mono);background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:3px 10px;border-radius:2px;cursor:pointer;font-weight:700;">+ Trade</button>
+      <button onclick="navExport()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 10px;border-radius:2px;cursor:pointer;">↓ Export</button>
+      <button onclick="navClear()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--red);padding:3px 10px;border-radius:2px;cursor:pointer;">✕ Clear</button>
+      <button onclick="showNavSection()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 10px;border-radius:2px;cursor:pointer;">← Back</button>
     </div>
   </div>
 
   <!-- Three columns -->
-  <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
+  <div class="nav-columns">
 
     <!-- LEFT: Regime + Model Portfolio -->
     <div class="nav-col-left">
-      <!-- Current regime pill -->
-      <div style="padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:6px;">Current Regime</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
-          <span id="nav-regime-pill" class="rpill rpill-E">—</span>
+
+      <!-- Regime status -->
+      <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div class="nav-section-title" style="padding:0 0 8px;border:none;background:none;">Current Regime</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+          <span id="nav-regime-pill" class="rpill rpill-E" style="font-size:12px;padding:3px 10px;">—</span>
           <span id="nav-regime-coord" style="font-family:var(--mono);font-size:10px;color:var(--muted);">(—, —)</span>
         </div>
         <div id="nav-regime-source" style="font-size:9px;color:var(--subtle);font-family:var(--mono);">—</div>
       </div>
 
       <!-- Regime Calculator -->
-      <div style="padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <div style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">⌖ Regime Calculator</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:6px;">
-          <div>
-            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">GDP QoQ%</div>
-            <input type="number" id="nav-rc-gdp" class="nav-rc-input" placeholder="0.007" step="0.0001"/>
-          </div>
-          <div>
-            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">ISM PMI</div>
-            <input type="number" id="nav-rc-pmi" class="nav-rc-input" placeholder="52.4" step="0.1"/>
-          </div>
-          <div>
-            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">Unemployment%</div>
-            <input type="number" id="nav-rc-unemp" class="nav-rc-input" placeholder="4.1" step="0.1"/>
-          </div>
-          <div>
-            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">Retail MoM%</div>
-            <input type="number" id="nav-rc-retail" class="nav-rc-input" placeholder="0.3" step="0.1"/>
-          </div>
-          <div>
-            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">CPI YoY%</div>
-            <input type="number" id="nav-rc-cpi" class="nav-rc-input" placeholder="2.4" step="0.01"/>
-          </div>
-          <div>
-            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">PCE YoY%</div>
-            <input type="number" id="nav-rc-pce" class="nav-rc-input" placeholder="2.4" step="0.01"/>
-          </div>
+      <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div class="nav-section-title" style="padding:0 0 10px;border:none;background:none;color:var(--amber);">⌖ Regime Calculator</div>
+        <div class="nav-rc-row">
+          <div><div class="nav-rc-label">GDP QoQ%</div><input type="number" id="nav-rc-gdp" class="nav-rc-input" placeholder="0.007" step="0.001"/></div>
+          <div><div class="nav-rc-label">ISM PMI</div><input type="number" id="nav-rc-pmi" class="nav-rc-input" placeholder="52.4" step="0.1"/></div>
+          <div><div class="nav-rc-label">Unemployment%</div><input type="number" id="nav-rc-unemp" class="nav-rc-input" placeholder="4.1" step="0.1"/></div>
+          <div><div class="nav-rc-label">Retail MoM%</div><input type="number" id="nav-rc-retail" class="nav-rc-input" placeholder="0.3" step="0.1"/></div>
+          <div><div class="nav-rc-label">CPI YoY%</div><input type="number" id="nav-rc-cpi" class="nav-rc-input" placeholder="2.4" step="0.01"/></div>
+          <div><div class="nav-rc-label">PCE YoY%</div><input type="number" id="nav-rc-pce" class="nav-rc-input" placeholder="2.4" step="0.01"/></div>
         </div>
-        <button onclick="navComputeRegime()" style="width:100%;padding:6px;background:var(--amber);color:#000;border:none;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--sans);">↻ Compute</button>
+        <button onclick="navComputeRegime()" style="width:100%;padding:7px;background:var(--amber);color:#000;border:none;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:.3px;">↻ Compute Regime</button>
         <div id="nav-rc-result"></div>
       </div>
 
       <!-- Model portfolio -->
-      <div style="padding:10px 12px;flex:1;overflow-y:auto;">
-        <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">Model Portfolio</div>
-        <div id="nav-model-list"></div>
+      <div style="padding:10px 14px;flex:1;overflow-y:auto;">
+        <div class="nav-section-title" style="padding:0 0 8px;border:none;background:none;">Model Portfolio</div>
+        <div id="nav-model-list" style="font-size:11px;color:var(--subtle);font-family:var(--mono);">Run backtest first</div>
       </div>
     </div>
 
-    <!-- CENTER: Dashboard -->
+    <!-- CENTER: Charts + Holdings table -->
     <div class="nav-col-center">
 
-      <!-- Charts row -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <div style="border-right:1px solid var(--border);padding:8px 10px;">
-          <div class="nav-panel-title" style="padding:0 0 5px;border:none;background:none;">Actual allocation</div>
-          <div id="nav-chart-alloc" style="height:150px;"></div>
+      <!-- Charts row: taller, 3 columns -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border-bottom:1px solid var(--border);flex-shrink:0;height:200px;">
+        <div style="border-right:1px solid var(--border);padding:8px 12px;display:flex;flex-direction:column;">
+          <div class="nav-section-title" style="padding:0 0 5px;border:none;background:none;font-size:9px;">Actual Allocation</div>
+          <div id="nav-chart-alloc" style="flex:1;min-height:0;"></div>
         </div>
-        <div style="border-right:1px solid var(--border);padding:8px 10px;">
-          <div class="nav-panel-title" style="padding:0 0 5px;border:none;background:none;">Actual vs model</div>
-          <div id="nav-chart-compare" style="height:150px;"></div>
+        <div style="border-right:1px solid var(--border);padding:8px 12px;display:flex;flex-direction:column;">
+          <div class="nav-section-title" style="padding:0 0 5px;border:none;background:none;font-size:9px;">Actual vs Model %</div>
+          <div id="nav-chart-compare" style="flex:1;min-height:0;"></div>
         </div>
-        <div style="padding:8px 10px;">
-          <div class="nav-panel-title" style="padding:0 0 5px;border:none;background:none;">P&amp;L by position</div>
-          <div id="nav-chart-pnl" style="height:150px;"></div>
+        <div style="padding:8px 12px;display:flex;flex-direction:column;">
+          <div class="nav-section-title" style="padding:0 0 5px;border:none;background:none;font-size:9px;">P&amp;L by Position</div>
+          <div id="nav-chart-pnl" style="flex:1;min-height:0;"></div>
         </div>
       </div>
 
-      <!-- Holdings table -->
+      <!-- Holdings table — scrollable -->
       <div style="flex:1;overflow-y:auto;">
-        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <table class="nav-table">
           <thead>
-            <tr style="background:var(--surface2);">
-              <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Asset</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Qty</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Cost</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Live</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">24h</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Value</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">P&amp;L</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Actual%</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Model%</th>
-              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Delta</th>
-              <th style="padding:6px 10px;position:sticky;top:0;background:var(--surface2);border-bottom:1px solid var(--border);"></th>
+            <tr>
+              <th style="text-align:left;min-width:120px;">Asset</th>
+              <th style="min-width:70px;">Qty</th>
+              <th style="min-width:80px;">Avg Cost</th>
+              <th style="min-width:100px;">Live Price</th>
+              <th style="min-width:60px;">24h</th>
+              <th style="min-width:80px;">Value</th>
+              <th style="min-width:100px;">P&amp;L</th>
+              <th style="min-width:70px;">Actual%</th>
+              <th style="min-width:70px;">Model%</th>
+              <th style="min-width:70px;">Delta</th>
+              <th style="min-width:50px;"></th>
             </tr>
           </thead>
           <tbody id="nav-holdings-tbody"></tbody>
         </table>
       </div>
 
-      <!-- Trade log strip at bottom -->
-      <div style="height:160px;border-top:1px solid var(--border);flex-shrink:0;overflow-y:auto;" id="nav-trade-log"></div>
+      <!-- Trade log at bottom -->
+      <div style="height:140px;border-top:1px solid var(--border);flex-shrink:0;overflow-y:auto;background:var(--surface);" id="nav-trade-log">
+        <div style="padding:5px 12px;border-bottom:1px solid var(--border);background:var(--surface2);">
+          <span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">Trade Log</span>
+        </div>
+      </div>
     </div>
 
-    <!-- RIGHT: CIO Agent (persistent) -->
+    <!-- RIGHT: CIO Agent -->
     <div class="nav-col-right">
-      <div class="nav-panel-title">
+      <div class="nav-section-title">
         <span>⬡ CIO Agent</span>
         <span style="display:flex;align-items:center;gap:5px;">
-          <span style="width:6px;height:6px;border-radius:50%;background:var(--green);"></span>
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green);"></span>
           <span style="font-size:9px;color:var(--green);">connected</span>
         </span>
       </div>
 
-      <!-- Snapshot context box -->
-      <div style="padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:5px;">Portfolio context (auto)</div>
-        <div id="nav-agent-context-box" style="background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:6px 8px;font-family:var(--mono);font-size:9px;color:var(--muted);max-height:90px;overflow-y:auto;white-space:pre;line-height:1.5;">—</div>
+      <!-- Context box -->
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:5px;">Auto-populated context</div>
+        <div id="nav-agent-context-box" style="background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:7px 9px;font-family:var(--mono);font-size:9px;color:var(--muted);max-height:100px;overflow-y:auto;white-space:pre;line-height:1.5;">—</div>
       </div>
 
-      <!-- Extra context input -->
-      <div style="padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:5px;">Extra context</div>
-        <textarea id="nav-agent-extra" placeholder="e.g. I want to reduce crypto. 12 month horizon." style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:3px;color:var(--text);font-family:var(--mono);font-size:10px;padding:6px 8px;resize:none;height:52px;outline:none;line-height:1.5;"></textarea>
+      <!-- Extra context -->
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:5px;">Extra context <span style="opacity:.5;">(optional)</span></div>
+        <textarea id="nav-agent-extra" placeholder="e.g. I want to reduce crypto exposure. 12 month horizon." style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:3px;color:var(--text);font-family:var(--mono);font-size:10px;padding:7px 9px;resize:none;height:58px;outline:none;line-height:1.5;box-sizing:border-box;"></textarea>
       </div>
 
       <!-- Run button -->
-      <div style="padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <button id="nav-agent-run-btn" onclick="navRunAgent()" style="width:100%;padding:8px;background:var(--green);color:#000;border:none;border-radius:3px;font-family:var(--sans);font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.3px;">▶ Run Analysis</button>
-        <div id="nav-agent-ts" style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-top:4px;text-align:right;"></div>
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <button id="nav-agent-run-btn" onclick="navRunAgent()" style="width:100%;padding:9px;background:var(--green);color:#000;border:none;border-radius:3px;font-family:var(--sans);font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.3px;">▶ Run Analysis</button>
+        <div id="nav-agent-ts" style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-top:5px;text-align:right;"></div>
       </div>
 
-      <!-- Agent output (scrollable, takes remaining space) -->
-      <div style="flex:1;overflow-y:auto;padding:10px 12px;">
+      <!-- Output -->
+      <div style="flex:1;overflow-y:auto;padding:12px;">
         <div id="nav-agent-output" style="display:none;"></div>
       </div>
     </div>
@@ -897,8 +919,8 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 </div>
 
 
-<script src="marc_data.js?v=14"></script>
-<script src="marc_app.js?v=14"></script>
-<script src="marc_nav.js?v=14"></script>
+<script src="marc_data.js?v=15"></script>
+<script src="marc_app.js?v=15"></script>
+<script src="marc_nav.js?v=15"></script>
 </body>
 </html>
