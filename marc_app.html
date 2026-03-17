@@ -711,11 +711,11 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
     <div class="agent-snapshot-label">Full model briefing (auto-populated)</div>
     <div class="agent-snapshot-box" id="agent-snapshot-box">—</div>
 
-    <!-- API Key -->
-    <div class="agent-field">
-      <label>Anthropic API key <span style="color:var(--amber);font-size:9px;">required</span></label>
-      <input type="password" id="agent-api-key" placeholder="sk-ant-..." autocomplete="off" spellcheck="false"/>
-      <div class="agent-key-hint">Never saved. Used only for this request.</div>
+    <!-- Connected status -->
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--green-dim);border:1px solid var(--green-mid);border-radius:3px;margin-bottom:14px;">
+      <span style="width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0;box-shadow:0 0 6px var(--green);"></span>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--green);font-weight:600;">MARC Agent connected</span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-left:auto;">claude-sonnet-4-6</span>
     </div>
 
     <!-- Extra context -->
