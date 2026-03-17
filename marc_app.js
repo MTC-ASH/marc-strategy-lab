@@ -76,125 +76,281 @@ function filterByDates(results, ma) {
 // ═══════════════════════════════════════
 // MARC AGENT PANEL
 // ═══════════════════════════════════════
-function buildAgentSnapshot(){
-  const q=getCurrentRegimeCoords(); if(!q) return '—';
-  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
-  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
-  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
-  const today=new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
-  return [
-    'MARC SNAPSHOT — '+today,
-    'REGIME: '+q.quadrant,
-    'Growth (X): '+q.rx.toFixed(4)+' | Inflation (Y): '+q.ry.toFixed(4),
-    'Alpha: '+params.alpha+' | N: '+Math.round(params.n)+' | mcBeta: '+params.mcbeta,
+
+function buildFullAgentContext() {
+  // ── Regime ──────────────────────────────────────────────────────
+  const q = getCurrentRegimeCoords();
+  if (!q) return 'No regime data available.';
+  const REGIME_AVG = {Expansion:3.0, Deflation:2.3, Reflation:3.6, Stagflation:2.0};
+  const avgDur = REGIME_AVG[q.quadrant] || 3;
+
+  // Regime duration (consecutive quarters)
+  const qKeys = Object.keys(quarterly).filter(qk=>qk>=startDate&&qk<=endDate).sort();
+  let duration = 0;
+  for (let i=qKeys.length-1; i>=0; i--) {
+    const qq = quarterly[qKeys[i]] || ALL_QUARTERLY[qKeys[i]];
+    if (qq?.quadrant === q.quadrant) duration++;
+    else break;
+  }
+  const durStatus = duration >= avgDur
+    ? 'EXTENDED — ' + duration + 'Q (avg ' + avgDur + 'Q) — elevated transition risk'
+    : 'Normal — ' + duration + 'Q of avg ' + avgDur + 'Q — regime likely to persist';
+
+  // Last 6 quarters path
+  const last6 = qKeys.slice(-6).map(qk => {
+    const qq = quarterly[qk] || ALL_QUARTERLY[qk];
+    return '  ' + qk + ': ' + qq?.quadrant + ' (X=' + qq?.rx?.toFixed(2) + ', Y=' + qq?.ry?.toFixed(2) + ')';
+  }).join('\n');
+
+  // ── Performance stats ────────────────────────────────────────────
+  const {filtered, filteredMa} = filterByDates(btResults, btResults._ma || MONTHLY_ATTR);
+  const stats = calcStats(filtered);
+  const totalRet = filtered.length ? filtered[filtered.length-1].port_cum / (filtered[0].port_cum/(1+filtered[0].port_ret)) : 1;
+
+  // ── Regime mix ───────────────────────────────────────────────────
+  const regC = {};
+  for (const r of filtered) regC[r.quadrant] = (regC[r.quadrant]||0) + 1;
+  const regMix = Object.entries(regC)
+    .sort((a,b)=>b[1]-a[1])
+    .map(([k,v]) => k + ': ' + (v/filtered.length*100).toFixed(0) + '% (' + v + ' months)')
+    .join(' | ');
+
+  // ── Model verdict ────────────────────────────────────────────────
+  const qKeysFull = [...new Set(filtered.map(r=>r.quarter))];
+  let wins = 0, verdictTotal = 0;
+  for (const qk of qKeysFull) {
+    const qq = quarterly[qk] || ALL_QUARTERLY[qk];
+    if (!qq || !qq.holdings) continue;
+    const qMas = [];
+    for (let i=0; i<filtered.length; i++) if (filtered[i].quarter===qk) qMas.push(filteredMa[i]||{});
+    const hSorted = [...qq.holdings].sort((a,b)=>a.dist-b.dist);
+    if (hSorted.length < 2) continue;
+    const half = Math.ceil(hSorted.length/2);
+    const close = hSorted.slice(0,half).map(h=>h.asset);
+    const far   = hSorted.slice(half).map(h=>h.asset);
+    const cR = qMas.reduce((s,ma)=>s+close.reduce((ss,a)=>ss+(ma[a]||0),0),0)/Math.max(qMas.length,1);
+    const fR = qMas.reduce((s,ma)=>s+far.reduce((ss,a)=>ss+(ma[a]||0),0),0)/Math.max(qMas.length,1);
+    if (cR > fR) wins++;
+    verdictTotal++;
+  }
+  const verdictPct = verdictTotal > 0 ? Math.round(wins/verdictTotal*100) : 0;
+
+  // ── Model portfolio ──────────────────────────────────────────────
+  const lastQk = Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop() || endDate;
+  const avail = ASSETS.filter(a=>a.first_data && a.first_data<=lastQk).map(a=>a.asset);
+  const excluded = ASSETS.filter(a=>!avail.includes(a.asset)).map(a=>a.asset);
+  const holdings = computeWeights(q.rx, q.ry, avail, params.alpha, params.mcbeta, params.n);
+
+  // Sector breakdown
+  const sectorTotals = {};
+  for (const h of holdings) sectorTotals[h.type] = (sectorTotals[h.type]||0) + h.weight;
+
+  // ── Contributors / detractors ────────────────────────────────────
+  const totals = {};
+  for (const ma of filteredMa) for (const [a,v] of Object.entries(ma)) totals[a] = (totals[a]||0)+v;
+  const sortedC = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  const topContribs = sortedC.filter(([,v])=>v>0).slice(0,6)
+    .map(([a,v]) => '  ' + a + ': +' + (v*100).toFixed(1) + '%');
+  const topDetract = sortedC.filter(([,v])=>v<0).slice(0,4)
+    .map(([a,v]) => '  ' + a + ': ' + (v*100).toFixed(1) + '%');
+
+  // ── Churn ────────────────────────────────────────────────────────
+  const rebalRows = filtered.filter(r=>r.l1>0);
+  const avgChurn = rebalRows.length > 0
+    ? rebalRows.reduce((s,r)=>s+r.l1,0)/rebalRows.length : 0;
+
+  // ── Active constraints ───────────────────────────────────────────
+  const activeSC = Object.entries(sectorCaps).filter(([,v])=>v<1)
+    .map(([k,v])=>k+'='+Math.round(v*100)+'%');
+  const activeCap = Object.entries(assetCaps).filter(([,v])=>v<1)
+    .map(([k,v])=>k+' max '+Math.round(v*100)+'%');
+  const activeFlr = Object.entries(assetFloors).filter(([,v])=>v>0)
+    .map(([k,v])=>k+' min '+Math.round(v*100)+'%');
+  const constraintStr = [...activeSC,...activeCap,...activeFlr].join(', ') || 'None active';
+
+  // ── Assemble full briefing ────────────────────────────────────────
+  const today = new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+  const lines = [
+    '╔══════════════════════════════════════════════╗',
+    '║         MARC FULL MODEL BRIEFING             ║',
+    '║  ' + today.padEnd(44) + '║',
+    '╚══════════════════════════════════════════════╝',
     '',
-    'MODEL PORTFOLIO:',
-    ...holdings.map(h=>h.asset+': '+(h.weight*100).toFixed(1)+'%')
-  ].join('\n');
+    '━━━ CURRENT MACRO REGIME ━━━━━━━━━━━━━━━━━━━━━━',
+    'Quadrant:   ' + q.quadrant.toUpperCase(),
+    'Coordinates: X (Growth) = ' + q.rx.toFixed(4) + '  |  Y (Inflation) = ' + q.ry.toFixed(4),
+    'Duration:   ' + durStatus,
+    '',
+    'Quadrant definitions:',
+    '  Expansion  (X≥0, Y<0) — high growth, low inflation',
+    '  Reflation  (X≥0, Y≥0) — rising growth + rising inflation',
+    '  Stagflation(X<0, Y≥0) — low growth, high inflation',
+    '  Deflation  (X<0, Y<0) — low growth, low inflation',
+    '',
+    '━━━ RECENT REGIME PATH (last 6 quarters) ━━━━━━',
+    last6,
+    '',
+    '━━━ BACKTEST PERFORMANCE (' + startDate + ' → ' + endDate + ') ━━',
+    'Total Return:  +' + (totalRet*100-100).toFixed(0) + '%  (' + totalRet.toFixed(1) + 'x)',
+    'CAGR:          +' + (stats.cagr*100).toFixed(1) + '% per year',
+    'Sharpe Ratio:  ' + stats.sharpe.toFixed(2),
+    'Sortino Ratio: ' + stats.sortino.toFixed(2),
+    'Max Drawdown:  -' + (stats.mdd*100).toFixed(1) + '%',
+    'Calmar Ratio:  ' + stats.calmar.toFixed(2),
+    'Avg Churn/Qtr: ' + (avgChurn*100).toFixed(0) + '% (L1 turnover at each rebalance)',
+    '',
+    '━━━ REGIME HISTORY (full backtest window) ━━━━━',
+    regMix,
+    '',
+    '━━━ MODEL VALIDITY SCORE ━━━━━━━━━━━━━━━━━━━━━━',
+    'Proximity Verdict: ' + verdictPct + '% of ' + verdictTotal + ' quarters — closest assets outperformed distant',
+    verdictPct >= 60
+      ? '→ STRONG signal: proximity scoring has genuine predictive power in this dataset'
+      : verdictPct >= 50
+      ? '→ MODERATE signal: some predictive power, use with caution'
+      : '→ WEAK signal: model may not be well-calibrated for this period',
+    '',
+    '━━━ MODEL PARAMETERS ━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    'Alpha (α):  ' + params.alpha + '  — proximity sharpness (higher = more concentrated near regime centroid)',
+    'Top N:      ' + Math.round(params.n) + '  — assets selected each quarter',
+    'mcBeta (β): ' + params.mcbeta + '  — market cap tilt (0 = pure proximity, 1 = full cap-weighted)',
+    '',
+    '━━━ CURRENT MODEL PORTFOLIO ━━━━━━━━━━━━━━━━━━━',
+    'Regime coords: (' + q.rx.toFixed(4) + ', ' + q.ry.toFixed(4) + ')  |  Assets: ' + holdings.length + ' of ' + avail.length + ' eligible',
+    '',
+    'Holdings (ranked by weight):',
+    ...holdings.map((h,i) =>
+      '  ' + (i+1).toString().padStart(2) + '. ' +
+      h.asset.padEnd(14) +
+      (h.type.slice(0,3)).padEnd(5) +
+      'dist=' + h.dist.toFixed(2).padEnd(7) +
+      (h.weight*100).toFixed(1) + '%'
+    ),
+    '',
+    'Sector allocation:',
+    ...Object.entries(sectorTotals).sort((a,b)=>b[1]-a[1])
+      .map(([t,w]) => '  ' + t.padEnd(12) + (w*100).toFixed(1) + '%'),
+    '',
+    '━━━ HISTORICAL CONTRIBUTORS (full window) ━━━━━',
+    'Top performers:',
+    ...topContribs,
+    'Underperformers:',
+    ...topDetract,
+    '',
+    '━━━ ASSET UNIVERSE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    'Eligible now:  ' + avail.length + ' of ' + ASSETS.length + ' assets',
+    excluded.length > 0
+      ? 'Excluded (' + excluded.length + ' — insufficient history): ' + excluded.join(', ')
+      : 'All assets eligible',
+    '',
+    '━━━ ACTIVE CONSTRAINTS ━━━━━━━━━━━━━━━━━━━━━━━━',
+    constraintStr,
+    '',
+    '══════════════════════════════════════════════',
+  ];
+
+  return lines.join('\n');
 }
 
-function openAgentPanel(){
-  const snapshot=buildAgentSnapshot();
-  const box=document.getElementById('agent-snapshot-box');
-  if(box) box.textContent=snapshot;
-  // Restore saved API key if present
-  const savedKey=sessionStorage.getItem('marc_agent_key');
-  if(savedKey){
-    const inp=document.getElementById('agent-api-key');
-    if(inp) inp.value=savedKey;
+// Keep old name for backward compat
+function buildAgentSnapshot() { return buildFullAgentContext(); }
+
+function openAgentPanel() {
+  const context = buildFullAgentContext();
+  const box = document.getElementById('agent-snapshot-box');
+  if (box) box.textContent = context;
+  const savedKey = sessionStorage.getItem('marc_agent_key');
+  if (savedKey) {
+    const inp = document.getElementById('agent-api-key');
+    if (inp) inp.value = savedKey;
   }
   document.getElementById('agent-panel').classList.add('open');
 }
 
-function closeAgentPanel(){
+function closeAgentPanel() {
   document.getElementById('agent-panel').classList.remove('open');
 }
 
-// Also keep exportForAgent for backward compat (now opens panel)
-function exportForAgent(){ openAgentPanel(); }
+function exportForAgent() { openAgentPanel(); }
 
-async function runMarcAgent(){
-  const apiKey=document.getElementById('agent-api-key').value.trim();
-  const context=document.getElementById('agent-context').value.trim();
-  const actualHoldings=document.getElementById('agent-holdings').value.trim();
+async function runMarcAgent() {
+  const apiKey = document.getElementById('agent-api-key').value.trim();
+  const context = document.getElementById('agent-context').value.trim();
+  const actualHoldings = document.getElementById('agent-holdings').value.trim();
 
-  if(!apiKey) return alert('Please enter your Anthropic API key.');
-
-  // Save key for session
+  if (!apiKey) return alert('Please enter your Anthropic API key.');
   sessionStorage.setItem('marc_agent_key', apiKey);
 
-  const snapshot=buildAgentSnapshot();
-  const btn=document.getElementById('agent-run-btn');
-  const output=document.getElementById('agent-output');
-  const wrap=document.getElementById('agent-output-wrap');
-  const ts=document.getElementById('agent-ts');
+  const fullContext = buildFullAgentContext();
 
-  btn.disabled=true; btn.textContent='Analysing…';
-  wrap.style.display='block';
-  output.className='thinking';
-  output.textContent='Reading your portfolio against the regime framework…';
-  ts.textContent='';
+  const btn    = document.getElementById('agent-run-btn');
+  const output = document.getElementById('agent-output');
+  const wrap   = document.getElementById('agent-output-wrap');
+  const ts     = document.getElementById('agent-ts');
 
-  const systemPrompt=`You are the MARC portfolio agent. MARC classifies the economy into four macro regime quadrants:
+  btn.disabled = true; btn.textContent = 'Analysing\u2026';
+  wrap.style.display = 'block';
+  output.className = 'thinking';
+  output.textContent = 'Reading full model state\u2026';
+  ts.textContent = '';
 
-• Expansion  (X≥0, Y<0)  — high growth, low inflation → favour: equities, growth assets, crypto
-• Stagflation (X<0,  Y≥0)  — low growth, high inflation → favour: gold, commodities, energy, short bonds
-• Reflation  (X≥0, Y≥0)  — rising growth+inflation  → favour: equities, real assets, commodities
-• Deflation  (X<0,  Y<0)  — low growth, low inflation  → favour: long bonds, cash, defensives
+  const systemPrompt = `You are the MARC portfolio agent — an expert macro strategist deeply integrated with the MARC Macro Regime Framework.
 
-X = Growth score (weighted avg of GDP, PMI, Unemployment, Retail Sales)
-Y = Inflation score (weighted avg of CPI, PCE)
+MARC classifies the economy into four quadrants using normalised macro indicators:
+  X axis = Growth score  (GDP, PMI, Unemployment, Retail Sales)
+  Y axis = Inflation score (CPI, PCE)
 
-Your job:
-1. Clearly state whether the portfolio is aligned or misaligned with the regime
-2. Identify the TOP 3 misalignments — assets over or underweight for the regime
-3. Give specific actionable rebalancing steps with target % changes
-4. Note risk concentration or sector issues
-5. Flag anything concerning
+  Expansion   (X\u22650, Y<0)  — high growth, low inflation  \u2192 equities, crypto, growth
+  Reflation   (X\u22650, Y\u22650)  — rising growth + inflation  \u2192 equities, real assets, commodities
+  Stagflation (X<0,  Y\u22650)  — low growth, high inflation  \u2192 gold, commodities, energy, short bonds
+  Deflation   (X<0,  Y<0)  — low growth, low inflation   \u2192 bonds, cash, defensives
 
-Rules:
-- Be direct and specific. Use numbers.
-- Format with these exact section headers:
-  REGIME ALIGNMENT
-  TOP MISALIGNMENTS
-  RECOMMENDED ACTIONS
-  RISK FLAGS`;
+You receive a FULL MODEL BRIEFING that includes regime history, backtest performance, model validity score, current portfolio, contributors, detractors, constraints, and asset universe.
 
-  const holdingsSection=actualHoldings
-    ? ('\nYour actual current holdings:\n'+actualHoldings+'\n\nCompare these against the model portfolio and identify the delta.')
-    : '\nNo actual holdings provided \u2014 analyse the model portfolio as the target allocation.';
+Your job is to deliver a deeply integrated analysis that uses ALL of this context. Be specific, analytical, and direct. Use numbers. Reference the actual data given.
 
-  const userMessage=snapshot+holdingsSection+(context?'\n\nAdditional context: '+context:'');
+Format your response with these exact section headers:
+
+REGIME ASSESSMENT
+PORTFOLIO ALIGNMENT
+KEY RISKS & MISALIGNMENTS
+RECOMMENDED ACTIONS
+FORWARD OUTLOOK`;
+
+  const holdingsStr = actualHoldings
+    ? ('\n\nUSER\'S ACTUAL HOLDINGS (compare against model):\n' + actualHoldings + '\n\nCalculate the delta between actual and model. Flag the biggest mismatches.')
+    : '\n\nNo actual holdings provided — analyse the model portfolio and regime positioning.';
+
+  const userMsg = fullContext + holdingsStr + (context ? '\n\nUSER CONTEXT: ' + context : '');
 
   try {
-    const response=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-api-key':apiKey,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-allow-browser':'true'
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-allow-browser': 'true'
       },
-      body:JSON.stringify({
-        model:'claude-sonnet-4-6',
-        max_tokens:1200,
-        system:systemPrompt,
-        messages:[{role:'user',content:userMessage}]
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1500,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMsg }]
       })
     });
 
-    const data=await response.json();
-    if(data.error) throw new Error(data.error.message);
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
 
-    const text=data.content[0].text;
-    output.className='';
-    output.textContent=text;
-    ts.textContent='Analysed at '+new Date().toLocaleTimeString();
-  } catch(err){
-    output.className='error';
-    output.textContent='⚠ Error: '+err.message+'\n\nCommon causes:\n• API key wrong or expired\n• No API credits (check console.anthropic.com)\n• Network issue';
+    output.className = '';
+    output.textContent = data.content[0].text;
+    ts.textContent = 'Analysed at ' + new Date().toLocaleTimeString();
+  } catch(err) {
+    output.className = 'error';
+    output.textContent = '\u26a0 Error: ' + err.message + '\n\nCommon causes:\n\u2022 API key wrong or expired\n\u2022 No API credits (check console.anthropic.com)\n\u2022 Network issue';
   }
-  btn.disabled=false; btn.textContent='▶ Run Analysis';
+  btn.disabled = false; btn.textContent = '\u25b6 Run Analysis';
 }
 
 // ═══════════════════════════════════════
