@@ -1,9 +1,13 @@
 // ── Cross-file globals ─────────────────────────────────────────────────────
-// `const` at script level does NOT attach to window, so marc_nav.js cannot
-// see PROXY_URL declared as const in marc_app.js. Declaring it here as var
-// (which DOES attach to window) makes it available everywhere.
-/* global params, computeWeights, startDate, endDate */
-var PROXY_URL = 'https://marc-agent.asher-8ca.workers.dev/';
+// PROXY_URL is declared as `const` in marc_app.js. `const` at script level
+// does NOT attach to window, so marc_nav.js uses a getter function instead.
+// We MUST NOT redeclare with var — that causes a SyntaxError with the const.
+/* global params, computeWeights, startDate, endDate, PROXY_URL */
+function _proxyUrl() {
+  // Try the const from marc_app.js scope (works if same JS context), then fallback
+  try { if (typeof PROXY_URL !== 'undefined') return PROXY_URL; } catch(e) {}
+  return 'https://marc-agent.asher-8ca.workers.dev/';
+}
 
 // ═══════════════════════════════════════════════════════════════
 // MARC NAV — Forward-looking portfolio layer
@@ -206,7 +210,7 @@ async function navFetchMacro() {
   if (btn) { btn.textContent='↻ Fetching…'; btn.disabled=true; }
 
   try {
-    var r = await fetch((PROXY_URL||'').replace(/\/+$/,'') + '/macro');
+    var r = await fetch((_proxyUrl()||'').replace(/\/+$/,'') + '/macro');
     var d = await r.json();
 
     if (d.error) throw new Error(d.error);
@@ -569,7 +573,7 @@ async function navFetchPrices() {
   if (btn) { btn.textContent = '\u21bb Fetching\u2026'; btn.disabled = true; }
 
   var allAssets = window.RAW ? window.RAW.assets.map(function(a){ return a.asset; }) : [];
-  var base = (PROXY_URL || '').replace(/\/+$/, '');
+  var base = (_proxyUrl() || '').replace(/\/+$/, '');
 
   try {
     // Single call — Jupiter handles all equities/ETFs, CMC handles crypto+Gold+Silver
@@ -891,7 +895,7 @@ async function navAutoFillFRED() {
   var res = document.getElementById('nav-rc-result');
 
   try {
-    var r = await fetch((PROXY_URL||'').replace(/\/+$/, '') + '/fred');
+    var r = await fetch((_proxyUrl()||'').replace(/\/+$/, '') + '/fred');
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
     if (d.error) throw new Error(d.error);
@@ -1141,7 +1145,7 @@ async function navChatDispatch(userMsg, silent) {
   var thinkingId = navChatAddMessage('agent', '', true);
 
   try {
-    var base = (PROXY_URL||'').replace(/\/+$/, '');
+    var base = (_proxyUrl()||'').replace(/\/+$/, '');
     var r = await fetch(base + '/ai', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'Origin': 'https://mtc-ash.github.io'},
