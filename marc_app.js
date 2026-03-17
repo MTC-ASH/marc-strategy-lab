@@ -23,6 +23,13 @@
 // ═══════════════════════════════════════
 // DATA
 // ═══════════════════════════════════════
+// ── MARC AGENT PROXY ─────────────────────────────────────────────
+// Set this to your Cloudflare Worker URL after deploying marc_proxy_worker.js
+// e.g. 'https://marc-proxy.YOUR-NAME.workers.dev'
+const PROXY_URL = 'https://marc-agent.asher-8ca.workers.dev/';
+const AGENT_KEY  = ''; // key stored securely in Cloudflare Worker env var — never in frontend
+// ─────────────────────────────────────────────────────────────────
+
 const ALL_MONTHS    = RAW.months;
 const ALL_RESULTS   = RAW.results;
 const ALL_QUARTERLY = RAW.quarterly;
@@ -259,11 +266,6 @@ function openAgentPanel() {
   const context = buildFullAgentContext();
   const box = document.getElementById('agent-snapshot-box');
   if (box) box.textContent = context;
-  const savedKey = sessionStorage.getItem('marc_agent_key');
-  if (savedKey) {
-    const inp = document.getElementById('agent-api-key');
-    if (inp) inp.value = savedKey;
-  }
   document.getElementById('agent-panel').classList.add('open');
 }
 
@@ -274,12 +276,9 @@ function closeAgentPanel() {
 function exportForAgent() { openAgentPanel(); }
 
 async function runMarcAgent() {
-  const apiKey = document.getElementById('agent-api-key').value.trim();
+  const apiKey = AGENT_KEY; // worker uses ANTHROPIC_API_KEY env var — this is intentionally blank
   const context = document.getElementById('agent-context').value.trim();
   const actualHoldings = document.getElementById('agent-holdings').value.trim();
-
-  if (!apiKey) return alert('Please enter your Anthropic API key.');
-  sessionStorage.setItem('marc_agent_key', apiKey);
 
   const fullContext = buildFullAgentContext();
 
@@ -324,14 +323,13 @@ FORWARD OUTLOOK`;
   const userMsg = fullContext + holdingsStr + (context ? '\n\nUSER CONTEXT: ' + context : '');
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const endpoint = PROXY_URL || 'https://api.anthropic.com/v1/messages';
+    // API key lives in Cloudflare Worker env var — never sent from frontend
+    const fetchHeaders = { 'Content-Type': 'application/json' };
+
+    const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-allow-browser': 'true'
-      },
+      headers: fetchHeaders,
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 1500,
