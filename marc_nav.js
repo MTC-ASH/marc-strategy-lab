@@ -1,3 +1,10 @@
+// ── Cross-file globals ─────────────────────────────────────────────────────
+// `const` at script level does NOT attach to window, so marc_nav.js cannot
+// see PROXY_URL declared as const in marc_app.js. Declaring it here as var
+// (which DOES attach to window) makes it available everywhere.
+/* global params, computeWeights, startDate, endDate */
+var PROXY_URL = 'https://marc-agent.asher-8ca.workers.dev/';
+
 // ═══════════════════════════════════════════════════════════════
 // MARC NAV — Forward-looking portfolio layer
 // Requires marc_data.js (window.RAW) and marc_app.js (computeWeights)
