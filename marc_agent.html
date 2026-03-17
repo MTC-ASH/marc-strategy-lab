@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MARC Agent</title>
+  <style>
+    /* ── Fonts ── */
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=DM+Sans:wght@300;400;500&display=swap');
+
+    /* ── Variables ── */
+    :root {
+      --bg:        #0d0f14;
+      --surface:   #13161e;
+      --border:    #1f2330;
+      --border-hi: #2e3347;
+      --text:      #c8ccd8;
+      --text-dim:  #5a607a;
+      --text-hi:   #eef0f6;
+      --accent:    #5b6ef5;
+      --accent-lo: rgba(91,110,245,0.12);
+      --green:     #3ecf6e;
+      --amber:     #f0b429;
+      --red:       #f04e4e;
+      --radius:    10px;
+      --mono:      'DM Mono', monospace;
+      --sans:      'DM Sans', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.6;
+      min-height: 100vh;
+      padding: 40px 20px 80px;
+    }
+
+    /* ── Layout ── */
+    .wrap { max-width: 760px; margin: 0 auto; }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 36px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .logo {
+      width: 36px; height: 36px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      color: #fff;
+      letter-spacing: -0.5px;
+      flex-shrink: 0;
+    }
+    header h1 {
+      font-size: 18px;
+      font-weight: 500;
+      color: var(--text-hi);
+      letter-spacing: -0.3px;
+    }
+    header p {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-top: 1px;
+    }
+    .status-pill {
+      margin-left: auto;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+    .status-pill.live {
+      border-color: var(--green);
+      color: var(--green);
+      background: rgba(62,207,110,0.08);
+    }
+
+    /* ── Section labels ── */
+    .field { margin-bottom: 20px; }
+    .field label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
+    }
+    .field label span.tag {
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--accent-lo);
+      color: var(--accent);
+      border: 1px solid rgba(91,110,245,0.3);
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    /* ── Inputs ── */
+    textarea, input[type="text"] {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text-hi);
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.7;
+      padding: 14px 16px;
+      resize: vertical;
+      transition: border-color 0.15s;
+      outline: none;
+    }
+    textarea:focus, input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+    textarea { height: 140px; }
+    textarea.short { height: 64px; }
+
+    /* ── Hint text ── */
+    .hint {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-top: 6px;
+      font-family: var(--mono);
+    }
+
+    /* ── API key row ── */
+    .api-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .api-row input { flex: 1; height: 42px; }
+    .api-link {
+      font-size: 12px;
+      color: var(--accent);
+      text-decoration: none;
+      white-space: nowrap;
+      padding: 12px 0;
+      display: block;
+      opacity: 0.8;
+    }
+    .api-link:hover { opacity: 1; }
+
+    /* ── Divider ── */
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 28px 0;
+    }
+
+    /* ── Run button ── */
+    #run-btn {
+      width: 100%;
+      padding: 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--sans);
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      letter-spacing: -0.2px;
+    }
+    #run-btn:hover:not(:disabled) { opacity: 0.88; }
+    #run-btn:active:not(:disabled) { transform: scale(0.99); }
+    #run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Output panel ── */
+    #output-wrap {
+      margin-top: 28px;
+      display: none;
+    }
+    .output-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .output-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .timestamp {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    #output {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      font-size: 14px;
+      line-height: 1.75;
+      color: var(--text);
+      white-space: pre-wrap;
+      font-family: var(--sans);
+    }
+    #output.thinking {
+      color: var(--text-dim);
+      font-family: var(--mono);
+      font-size: 13px;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    #output.error {
+      color: var(--red);
+      border-color: rgba(240,78,78,0.3);
+      background: rgba(240,78,78,0.06);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.45; }
+    }
+
+    /* ── Info callout ── */
+    .callout {
+      background: var(--accent-lo);
+      border: 1px solid rgba(91,110,245,0.25);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      font-size: 13px;
+      color: var(--text);
+      margin-bottom: 24px;
+      line-height: 1.6;
+    }
+    .callout strong { color: var(--text-hi); }
+    .callout a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">M</div>
+    <div>
+      <h1>MARC Agent</h1>
+      <p>Regime-aware portfolio analysis</p>
+    </div>
+    <div class="status-pill" id="status-pill">Step 1 — manual</div>
+  </header>
+
+  <!-- Info callout -->
+  <div class="callout">
+    <strong>How this works:</strong> Paste your current holdings and the active regime below.
+    The agent reads your portfolio through the MARC macro framework and tells you
+    exactly what's misaligned, what to rebalance, and why.
+    Get your free API key at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.
+  </div>
+
+  <!-- API Key -->
+  <div class="field">
+    <label>Anthropic API key <span class="tag">required</span></label>
+    <div class="api-row">
+      <input type="text" id="api-key"
+        placeholder="sk-ant-..."
+        autocomplete="off" spellcheck="false"/>
+      <a class="api-link" href="https://console.anthropic.com" target="_blank">Get key →</a>
+    </div>
+    <p class="hint">Never saved. Only used for this request. Don't share this page while your key is entered.</p>
+  </div>
+
+  <hr class="divider">
+
+  <!-- Regime -->
+  <div class="field">
+    <label>Current regime <span class="tag">from MARC</span></label>
+    <textarea class="short" id="regime"
+      placeholder="Stagflation — Growth score: 32, Inflation score: 71. Regime has held for 14 days."></textarea>
+    <p class="hint">Copy this from the MARC app quadrant display.</p>
+  </div>
+
+  <!-- Holdings -->
+  <div class="field">
+    <label>Your current holdings <span class="tag">actual %</span></label>
+    <textarea id="holdings"
+      placeholder="BTC: 15%
+ETH: 10%
+SPY: 25%
+GLD: 8%
+AAPL: 12%
+Cash: 30%"></textarea>
+    <p class="hint">List each asset and your current % allocation. Should add to 100%.</p>
+  </div>
+
+  <!-- Optional context -->
+  <div class="field">
+    <label>Any extra context <span class="tag">optional</span></label>
+    <textarea class="short" id="context"
+      placeholder="e.g. I want to reduce crypto exposure. I can't hold leveraged ETFs. My time horizon is 12 months."></textarea>
+  </div>
+
+  <!-- Run button -->
+  <button id="run-btn" onclick="runAgent()">Run agent analysis</button>
+
+  <!-- Output -->
+  <div id="output-wrap">
+    <div class="output-header">
+      <span class="output-label">Agent analysis</span>
+      <span class="timestamp" id="ts"></span>
+    </div>
+    <div id="output"></div>
+  </div>
+
+</div>
+
+<script>
+  async function runAgent() {
+    const apiKey   = document.getElementById('api-key').value.trim();
+    const regime   = document.getElementById('regime').value.trim();
+    const holdings = document.getElementById('holdings').value.trim();
+    const context  = document.getElementById('context').value.trim();
+
+    // ── Validation ──────────────────────────────────────────
+    if (!apiKey) {
+      return alert('Please enter your Anthropic API key first.');
+    }
+    if (!regime) {
+      return alert('Please enter the current regime (copy from the MARC app).');
+    }
+    if (!holdings) {
+      return alert('Please enter your current holdings.');
+    }
+
+    // ── UI: loading state ────────────────────────────────────
+    const btn    = document.getElementById('run-btn');
+    const output = document.getElementById('output');
+    const wrap   = document.getElementById('output-wrap');
+    const ts     = document.getElementById('ts');
+    const pill   = document.getElementById('status-pill');
+
+    btn.disabled      = true;
+    btn.textContent   = 'Analysing…';
+    wrap.style.display = 'block';
+    output.className  = 'thinking';
+    output.textContent = 'Reading your portfolio against the regime framework…';
+    pill.textContent  = 'running';
+    pill.className    = 'status-pill live';
+    ts.textContent    = '';
+
+    // ── Prompts ──────────────────────────────────────────────
+    const systemPrompt = `You are the MARC portfolio agent. MARC is a macro regime 
+framework that classifies the economy into four quadrants based on 
+growth and inflation momentum:
+
+• Expansion  — high growth, low inflation → favour: equities, growth, crypto
+• Stagflation — low growth, high inflation → favour: gold, commodities, energy, short bonds
+• Reflation  — rising growth, rising inflation → favour: equities, real assets, commodities  
+• Deflation  — low growth, low inflation → favour: long bonds, cash, defensives
+
+Your job:
+1. Clearly state whether the portfolio is well-aligned or misaligned with the current regime
+2. Identify the TOP 3 misalignments — assets that are over or underweight given the regime
+3. Give specific, actionable rebalancing steps with target % allocations
+4. Note any risk concentration or sector issues
+5. Flag anything that stands out as a concern
+
+Rules:
+- Be direct and specific. Use numbers.
+- Keep it practical — real suggestions, not vague advice.
+- Format your response with clear sections using these headers:
+  REGIME ALIGNMENT
+  TOP MISALIGNMENTS
+  RECOMMENDED ACTIONS
+  RISK FLAGS`;
+
+    const userMessage = `Current macro regime: ${regime}
+
+My portfolio:
+${holdings}
+${context ? `\nAdditional context: ${context}` : ''}
+
+Analyse my portfolio and tell me what to do.`;
+
+    // ── API call ─────────────────────────────────────────────
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-allow-browser': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }]
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.error) {
+        throw new Error(data.error.message);
+      }
+
+      const text = data.content[0].text;
+
+      output.className  = '';
+      output.textContent = text;
+      ts.textContent     = 'Analysed at ' + new Date().toLocaleTimeString();
+      pill.textContent   = 'done';
+      pill.className     = 'status-pill live';
+
+    } catch (err) {
+      output.className  = 'error';
+      output.textContent = '⚠ Error: ' + err.message
+        + '\n\nCommon causes:\n'
+        + '• API key is wrong or expired\n'
+        + '• You have no API credits (check console.anthropic.com)\n'
+        + '• Network issue';
+      pill.textContent  = 'error';
+      pill.className    = 'status-pill';
+    }
+
+    // ── Reset button ─────────────────────────────────────────
+    btn.disabled    = false;
+    btn.textContent = 'Run agent analysis';
+  }
+</script>
+
+</body>
+</html>
