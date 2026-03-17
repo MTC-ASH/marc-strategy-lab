@@ -81,6 +81,81 @@ function filterByDates(results, ma) {
 }
 
 // ═══════════════════════════════════════
+// MARKDOWN RENDERER (for agent output)
+// ═══════════════════════════════════════
+function renderMarkdown(text) {
+  let h = text
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;');
+
+  // ## Headers
+  h = h.replace(/^## (.+)$/gm,'<h2>$1</h2>');
+  h = h.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  h = h.replace(/^# (.+)$/gm,'<h2>$1</h2>');
+
+  // Horizontal rules
+  h = h.replace(/^---+$/gm,'<hr>');
+
+  // Bold **x**
+  h = h.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
+  // Italic *x*
+  h = h.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g,'<em>$1</em>');
+  // Code `x`
+  h = h.replace(/`([^`\n]+)`/g,'<code>$1</code>');
+
+  // Bullet lists (- or *)
+  h = h.replace(/((?:^[ \t]*[-*] [^\n]+\n?)+)/gm, function(m) {
+    var items = m.trim().split('\n').map(function(l) {
+      return '<li>' + l.replace(/^[ \t]*[-*] /, '') + '</li>';
+    }).join('');
+    return '<ul>' + items + '</ul>';
+  });
+
+  // Numbered lists
+  h = h.replace(/((?:^[ \t]*\d+\. [^\n]+\n?)+)/gm, function(m) {
+    var items = m.trim().split('\n').map(function(l) {
+      return '<li>' + l.replace(/^[ \t]*\d+\. /, '') + '</li>';
+    }).join('');
+    return '<ol>' + items + '</ol>';
+  });
+
+  // Simple table parser: lines starting with |
+  var lines = h.split('\n');
+  var out = [];
+  var i = 0;
+  while (i < lines.length) {
+    var line = lines[i];
+    if (line.match(/^\|/) && i+1 < lines.length && lines[i+1].match(/^\|[-| :]+\|/)) {
+      // Header row
+      var hdrCells = line.split('|').slice(1,-1).map(function(s){
+        return '<th>' + s.trim() + '</th>';
+      }).join('');
+      i += 2; // skip separator
+      var rows = '';
+      while (i < lines.length && lines[i].match(/^\|/)) {
+        var cells = lines[i].split('|').slice(1,-1).map(function(s){
+          return '<td>' + s.trim() + '</td>';
+        }).join('');
+        rows += '<tr>' + cells + '</tr>';
+        i++;
+      }
+      out.push('<table><thead><tr>' + hdrCells + '</tr></thead><tbody>' + rows + '</tbody></table>');
+    } else {
+      out.push(line);
+      i++;
+    }
+  }
+  h = out.join('\n');
+
+  // Paragraphs: wrap plain lines not already in a tag
+  h = h.replace(/^(?!<[htuo\d\/]|$)(.+)$/gm,'<p>$1</p>');
+
+  return h;
+}
+
+
+// ═══════════════════════════════════════
 // MARC AGENT PANEL
 // ═══════════════════════════════════════
 
@@ -293,28 +368,17 @@ async function runMarcAgent() {
   output.textContent = 'Reading full model state\u2026';
   ts.textContent = '';
 
-  const systemPrompt = `You are the MARC portfolio agent — an expert macro strategist deeply integrated with the MARC Macro Regime Framework.
+  const systemPrompt = `You are MARC's CIO agent. Deliver tight, high-signal portfolio analysis. No padding, no preamble.
 
-MARC classifies the economy into four quadrants using normalised macro indicators:
-  X axis = Growth score  (GDP, PMI, Unemployment, Retail Sales)
-  Y axis = Inflation score (CPI, PCE)
+MARC quadrants: Expansion(X>=0,Y<0)=equities/crypto | Reflation(X>=0,Y>=0)=equities/commodities | Stagflation(X<0,Y>=0)=gold/energy | Deflation(X<0,Y<0)=bonds/cash
 
-  Expansion   (X\u22650, Y<0)  — high growth, low inflation  \u2192 equities, crypto, growth
-  Reflation   (X\u22650, Y\u22650)  — rising growth + inflation  \u2192 equities, real assets, commodities
-  Stagflation (X<0,  Y\u22650)  — low growth, high inflation  \u2192 gold, commodities, energy, short bonds
-  Deflation   (X<0,  Y<0)  — low growth, low inflation   \u2192 bonds, cash, defensives
+RULES: Max 350 words. Every sentence needs a number or asset name. Use markdown formatting.
 
-You receive a FULL MODEL BRIEFING that includes regime history, backtest performance, model validity score, current portfolio, contributors, detractors, constraints, and asset universe.
-
-Your job is to deliver a deeply integrated analysis that uses ALL of this context. Be specific, analytical, and direct. Use numbers. Reference the actual data given.
-
-Format your response with these exact section headers:
-
-REGIME ASSESSMENT
-PORTFOLIO ALIGNMENT
-KEY RISKS & MISALIGNMENTS
-RECOMMENDED ACTIONS
-FORWARD OUTLOOK`;
+FORMAT — use exactly these headers:
+## Regime Assessment
+## Portfolio Alignment
+## Actions
+## Risk`;
 
   const holdingsStr = actualHoldings
     ? ('\n\nUSER\'S ACTUAL HOLDINGS (compare against model):\n' + actualHoldings + '\n\nCalculate the delta between actual and model. Flag the biggest mismatches.')
@@ -332,7 +396,7 @@ FORWARD OUTLOOK`;
       headers: fetchHeaders,
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 1500,
+        max_tokens: 800,
         system: systemPrompt,
         messages: [{ role: 'user', content: userMsg }]
       })
@@ -342,7 +406,7 @@ FORWARD OUTLOOK`;
     if (data.error) throw new Error(data.error.message);
 
     output.className = '';
-    output.textContent = data.content[0].text;
+    output.innerHTML = renderMarkdown(data.content[0].text);
     ts.textContent = 'Analysed at ' + new Date().toLocaleTimeString();
   } catch(err) {
     output.className = 'error';
