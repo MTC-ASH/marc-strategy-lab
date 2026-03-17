@@ -557,55 +557,30 @@ function renderPriceTicker() {
 async function navFetchPrices() {
   var btn = document.getElementById('nav-price-btn');
   var updatedEl = document.getElementById('nav-kpi-updated');
-  if (btn) { btn.textContent='↻ Fetching\u2026'; btn.disabled=true; }
+  if (btn) { btn.textContent = '\u21bb Fetching\u2026'; btn.disabled = true; }
 
-  var allAssets = window.RAW ? window.RAW.assets.map(function(a){return a.asset;}) : [];
-  var base = (PROXY_URL||'').replace(/\/+$/, '');
+  var allAssets = window.RAW ? window.RAW.assets.map(function(a){ return a.asset; }) : [];
+  var base = (PROXY_URL || '').replace(/\/+$/, '');
 
-  var CRYPTO = ['Bitcoin','Ethereum','XRP','BNB','Solana','Tron','Hyperliquid',
-    'Chainlink','Sui','Avalanche','Uniswap','Jupiter','Hedera','Monero','Zcash',
-    'Gold','Silver'];
+  try {
+    // Single call — Jupiter handles all equities/ETFs, CMC handles crypto+Gold+Silver
+    // No batching, no rate limits, ~300ms total
+    var r = await fetch(base + '/prices?assets=' + allAssets.join(','));
+    var result = await r.json();
+    if (result.prices && Object.keys(result.prices).length) {
+      var d = navLoad();
+      if (!d.prices) d.prices = {};
+      Object.assign(d.prices, result.prices);
+      d.lastFetched = new Date().toISOString();
+      navSave(d);
+    }
+    if (result.errors) {
+      var errCount = Object.keys(result.errors).length;
+      if (errCount) console.warn('Price errors (' + errCount + '):', result.errors);
+    }
+  } catch(e) { console.error('Price fetch error:', e.message); }
 
-  var cryptoAssets = allAssets.filter(function(a){ return CRYPTO.indexOf(a)>=0; });
-  var equityAssets = allAssets.filter(function(a){ return CRYPTO.indexOf(a)<0; });
-
-  async function fetchGroup(assets, label) {
-    if (!assets.length) return;
-    try {
-      var r = await fetch(base + '/prices?assets=' + assets.join(','));
-      var result = await r.json();
-      if (result.prices && Object.keys(result.prices).length) {
-        var d = navLoad();
-        if (!d.prices) d.prices = {};
-        Object.assign(d.prices, result.prices);
-        d.lastFetched = new Date().toISOString();
-        navSave(d);
-        renderNavDashboard();
-      }
-    } catch(e) { console.error('Price fetch ('+label+'):', e.message); }
-  }
-
-  // Phase 1: crypto + Gold + Silver via CMC (instant)
-  await fetchGroup(cryptoAssets, 'crypto');
-
-  // Phase 2: equities/ETFs via Twelve Data — max 7 per call (free tier: 8/min)
-  var batch1 = equityAssets.slice(0, 7);
-  var batch2 = equityAssets.slice(7);
-
-  if (batch1.length) {
-    if (btn) btn.textContent = '\u21bb Equities 1/2\u2026';
-    await fetchGroup(batch1, 'equity-1');
-  }
-
-  if (batch2.length) {
-    if (btn) btn.textContent = '\u21bb Waiting 62s\u2026';
-    if (updatedEl) updatedEl.textContent = 'Equity batch 2 in 62s\u2026';
-    await new Promise(function(r){ setTimeout(r, 62000); });
-    if (btn) btn.textContent = '\u21bb Equities 2/2\u2026';
-    await fetchGroup(batch2, 'equity-2');
-  }
-
-  if (btn) { btn.textContent='\u21bb Refresh Prices'; btn.disabled=false; }
+  if (btn) { btn.textContent = '\u21bb Refresh Prices'; btn.disabled = false; }
   renderNavDashboard();
 }
 
