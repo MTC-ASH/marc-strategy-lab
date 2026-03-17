@@ -146,8 +146,10 @@ function showNavSection() {
     renderNavRegimePanel();
     renderNavDashboard();
     renderNavAgentContext();
+    setTimeout(renderNavAgentContext, 100);
   }
 }
+
 
 // ══════════════════════════════════════════════════════════════════════════
 // REGIME PANEL (left column)
@@ -197,7 +199,7 @@ async function navFetchMacro() {
   if (btn) { btn.textContent='↻ Fetching…'; btn.disabled=true; }
 
   try {
-    var r = await fetch(PROXY_URL + 'macro');
+    var r = await fetch((PROXY_URL||'').replace(/\/+$/,'') + '/macro');
     var d = await r.json();
 
     if (d.error) throw new Error(d.error);
@@ -694,42 +696,7 @@ function renderNavAgentContext() {
   var totalPnl = totalValue - totalCost;
 }
 
-async function navRunAgent() {
-  var context = document.getElementById('nav-agent-context-box')?.textContent || '';
-  var extraCtx = document.getElementById('nav-agent-extra')?.value?.trim() || '';
-  var btn = document.getElementById('nav-agent-run-btn');
-  var output = document.getElementById('nav-agent-output');
-  var ts = document.getElementById('nav-agent-ts');
-
-  btn.disabled=true; btn.textContent='Analysing…';
-  output.className=''; output.style.display='block';
-  output.innerHTML='<div style="color:var(--subtle);font-family:var(--mono);font-size:11px;animation:navPulse 1.4s ease-in-out infinite;">Reading portfolio state…</div>';
-  ts.textContent='';
-
-  var systemPrompt = 'You are MARC\'s CIO agent — a sharp macro strategist with full visibility of the current portfolio state.\n\n'
-    +'MARC quadrants: Expansion(X\u22650,Y<0)=equities/crypto | Reflation(X\u22650,Y\u22650)=equities/commodities | Stagflation(X<0,Y\u22650)=gold/energy | Deflation(X<0,Y<0)=bonds/cash\n\n'
-    +'RULES: Max 350 words. Every sentence needs a number or asset name. Use markdown.\n\n'
-    +'FORMAT:\n## Regime Assessment\n## Portfolio Alignment\n## Actions\n## Risk';
-
-  var userMsg = context + (extraCtx ? '\n\nContext: ' + extraCtx : '');
-
-  try {
-    var endpoint = PROXY_URL ? PROXY_URL + 'ai' : 'https://api.anthropic.com/v1/messages';
-    var r = await fetch(endpoint, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:800,
-        system:systemPrompt, messages:[{role:'user',content:userMsg}]})
-    });
-    var data = await r.json();
-    if (data.error) throw new Error(data.error.message);
-    output.innerHTML = renderMarkdown(data.content[0].text);
-    ts.textContent = 'Analysed ' + new Date().toLocaleTimeString();
-  } catch(e) {
-    output.innerHTML = '<div style="color:var(--red);">⚠ ' + e.message + '</div>';
-  }
-  btn.disabled=false; btn.textContent='▶ Run Analysis';
-}
+async function navRunAgent() { navAgentProactive(); }
 
 // ══════════════════════════════════════════════════════════════════════════
 // EXPORT / CLEAR
