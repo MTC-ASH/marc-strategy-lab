@@ -362,9 +362,66 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 .nav-table .live-price { display:flex;align-items:center;justify-content:flex-end;gap:4px;font-family:var(--mono);font-weight:600; }
 .nav-table .pnl-cell { line-height:1.3; }
 .nav-table .pnl-pct { font-size:9px;opacity:.8; }
+/* Section divider rows */
+.nav-section-row td {
+  padding:4px 10px;background:var(--surface2);border-bottom:1px solid var(--border);
+  font-size:9px;font-family:var(--mono);letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--subtle);font-weight:400;
+}
+/* In-portfolio rows get a subtle left accent */
+.nav-table tr.in-portfolio td:first-child {
+  border-left:2px solid var(--green);padding-left:8px;
+}
+/* Model-only rows (no position) */
+.nav-table tr.model-only td { opacity:0.65; }
+.nav-table tr.model-only:hover td { opacity:1; }
+/* Watch-only rows (no position, not in model) */
+.nav-table tr.watch-only td { opacity:0.35; }
+.nav-table tr.watch-only:hover td { opacity:0.7; }
 /* Agent output */
 @keyframes navPulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 #nav-agent-output { font-size:11px;line-height:1.75;color:var(--text);font-family:var(--sans); }
+/* Chat UI */
+.nav-chat-msg { display:flex;flex-direction:column;gap:3px;animation:fadeSlideIn .2s ease; }
+@keyframes fadeSlideIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+.nav-chat-msg.user { align-items:flex-end; }
+.nav-chat-msg.agent { align-items:flex-start; }
+.nav-chat-bubble {
+  max-width:92%;padding:8px 11px;border-radius:6px;font-size:11px;line-height:1.65;
+  word-break:break-word;
+}
+.nav-chat-msg.user .nav-chat-bubble {
+  background:var(--green-dim);border:1px solid var(--green-mid);color:var(--text);
+  border-radius:6px 6px 2px 6px;font-family:var(--mono);
+}
+.nav-chat-msg.agent .nav-chat-bubble {
+  background:var(--surface2);border:1px solid var(--border);color:var(--text);
+  border-radius:2px 6px 6px 6px;font-family:var(--sans);
+}
+.nav-chat-msg.agent .nav-chat-bubble h2 {
+  font-size:10px;font-weight:700;color:var(--green);letter-spacing:1px;
+  text-transform:uppercase;margin:10px 0 4px;padding-bottom:3px;
+  border-bottom:1px solid var(--border);font-family:var(--mono);
+}
+.nav-chat-msg.agent .nav-chat-bubble h2:first-child { margin-top:0; }
+.nav-chat-msg.agent .nav-chat-bubble p { margin-bottom:6px; }
+.nav-chat-msg.agent .nav-chat-bubble p:last-child { margin-bottom:0; }
+.nav-chat-msg.agent .nav-chat-bubble strong { color:var(--text);font-weight:600; }
+.nav-chat-msg.agent .nav-chat-bubble ul { margin:3px 0 6px 14px; }
+.nav-chat-msg.agent .nav-chat-bubble li { margin-bottom:2px; }
+.nav-chat-msg.agent .nav-chat-bubble table { width:100%;border-collapse:collapse;font-size:10px;font-family:var(--mono);margin:6px 0; }
+.nav-chat-msg.agent .nav-chat-bubble th { padding:3px 7px;background:var(--bg);color:var(--subtle);font-size:9px;text-transform:uppercase;border-bottom:1px solid var(--border);font-weight:400; }
+.nav-chat-msg.agent .nav-chat-bubble td { padding:3px 7px;border-bottom:1px solid var(--border); }
+.nav-chat-msg.agent .nav-chat-bubble code { font-family:var(--mono);font-size:10px;background:var(--bg);padding:1px 4px;border-radius:2px;color:var(--green); }
+.nav-chat-ts { font-size:8px;color:var(--subtle);font-family:var(--mono);padding:0 3px; }
+.nav-chat-thinking .nav-chat-bubble { color:var(--subtle);animation:navPulse 1.2s ease-in-out infinite; }
+/* Quick action buttons */
+.nav-quick-btn {
+  font-size:9px;font-family:var(--mono);background:var(--surface2);
+  border:1px solid var(--border);color:var(--muted);padding:2px 7px;
+  border-radius:2px;cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.nav-quick-btn:hover { border-color:var(--green);color:var(--green); }
 #nav-agent-output h2 {
   font-size:11px;font-weight:700;color:var(--green);letter-spacing:1px;
   text-transform:uppercase;margin:12px 0 5px;padding-bottom:3px;
@@ -854,37 +911,48 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
       </div>
     </div>
 
-    <!-- RIGHT: CIO Agent -->
-    <div class="nav-col-right">
-      <div class="nav-section-title">
-        <span>⬡ CIO Agent</span>
-        <span style="display:flex;align-items:center;gap:5px;">
-          <span style="width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green);"></span>
-          <span style="font-size:9px;color:var(--green);">connected</span>
+    <!-- RIGHT: CIO Agent Chat -->
+    <div class="nav-col-right" style="display:flex;flex-direction:column;">
+      <!-- Header -->
+      <div class="nav-section-title" style="flex-shrink:0;">
+        <span style="display:flex;align-items:center;gap:7px;">
+          <span>⬡ CIO Agent</span>
+          <span id="nav-agent-status-dot" style="width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green);"></span>
         </span>
+        <div style="display:flex;gap:5px;">
+          <button onclick="navAgentProactive()" title="Auto-analyse portfolio" style="font-size:9px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--amber);padding:2px 7px;border-radius:2px;cursor:pointer;" id="nav-agent-proactive-btn">⚡ Auto</button>
+          <button onclick="navAgentClearChat()" title="Clear chat" style="font-size:9px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--subtle);padding:2px 7px;border-radius:2px;cursor:pointer;">✕ Clear</button>
+        </div>
       </div>
 
-      <!-- Context box -->
-      <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:5px;">Auto-populated context</div>
-        <div id="nav-agent-context-box" style="background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:7px 9px;font-family:var(--mono);font-size:9px;color:var(--muted);max-height:100px;overflow-y:auto;white-space:pre;line-height:1.5;">—</div>
+      <!-- Chat thread -->
+      <div id="nav-chat-thread" style="flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-height:0;">
+        <!-- Messages injected here -->
+        <div id="nav-chat-empty" style="text-align:center;padding:30px 10px;color:var(--subtle);font-size:11px;font-family:var(--mono);">
+          Ask anything about your portfolio<br>
+          <span style="font-size:9px;opacity:.6;">or click ⚡ Auto for a proactive analysis</span>
+        </div>
       </div>
 
-      <!-- Extra context -->
-      <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:5px;">Extra context <span style="opacity:.5;">(optional)</span></div>
-        <textarea id="nav-agent-extra" placeholder="e.g. I want to reduce crypto exposure. 12 month horizon." style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:3px;color:var(--text);font-family:var(--mono);font-size:10px;padding:7px 9px;resize:none;height:58px;outline:none;line-height:1.5;box-sizing:border-box;"></textarea>
-      </div>
-
-      <!-- Run button -->
-      <div style="padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <button id="nav-agent-run-btn" onclick="navRunAgent()" style="width:100%;padding:9px;background:var(--green);color:#000;border:none;border-radius:3px;font-family:var(--sans);font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.3px;">▶ Run Analysis</button>
-        <div id="nav-agent-ts" style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-top:5px;text-align:right;"></div>
-      </div>
-
-      <!-- Output -->
-      <div style="flex:1;overflow-y:auto;padding:12px;">
-        <div id="nav-agent-output" style="display:none;"></div>
+      <!-- Input bar -->
+      <div style="padding:8px 12px;border-top:1px solid var(--border);flex-shrink:0;background:var(--surface);">
+        <div style="display:flex;gap:6px;align-items:flex-end;">
+          <textarea id="nav-chat-input" placeholder="Ask the CIO agent…" rows="2"
+            style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:3px;
+                   color:var(--text);font-family:var(--mono);font-size:11px;padding:7px 9px;
+                   resize:none;outline:none;line-height:1.5;box-sizing:border-box;"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();navChatSend();}"></textarea>
+          <button onclick="navChatSend()" id="nav-chat-send-btn"
+            style="padding:7px 12px;background:var(--green);color:#000;border:none;border-radius:3px;
+                   font-family:var(--sans);font-size:11px;font-weight:700;cursor:pointer;
+                   flex-shrink:0;align-self:flex-end;">▶</button>
+        </div>
+        <div style="display:flex;gap:5px;margin-top:5px;flex-wrap:wrap;">
+          <button onclick="navChatQuick('Analyse my portfolio vs the model')" class="nav-quick-btn">Portfolio vs model</button>
+          <button onclick="navChatQuick('What should I rebalance now?')" class="nav-quick-btn">Rebalance now</button>
+          <button onclick="navChatQuick('Explain the current regime and what it means for my holdings')" class="nav-quick-btn">Current regime</button>
+          <button onclick="navChatQuick('What are the biggest risks in my portfolio?')" class="nav-quick-btn">Risk check</button>
+        </div>
       </div>
     </div>
   </div>
