@@ -41,6 +41,7 @@ const CC  = ['#FF6B9D','#00E5FF','#B9FF66','#FF9A3C','#E040FB','#FFFF00'];
 let params      = {alpha:1.0, mcbeta:0.0, n:15};
 let lockedParams = {alpha:false, mcbeta:false, n:false};
 let sectorCaps  = {Equity:1, ETF:1, Crypto:1, Commodity:1};
+let regimeCalcCoords = null; // set by Regime Calculator tab
 let assetCaps   = {};   // 0..1
 let assetFloors = {};   // 0..1
 let comparisons = [];
@@ -48,7 +49,7 @@ let quarterly   = JSON.parse(JSON.stringify(ALL_QUARTERLY));
 let btResults   = JSON.parse(JSON.stringify(ALL_RESULTS));
 btResults._ma   = MONTHLY_ATTR;
 let startDate   = '2010-01';
-let endDate     = '2025-12';
+let endDate     = '2026-03';
 let logScale    = false;
 let sensiCache  = {};
 let showElig    = false;
@@ -110,7 +111,7 @@ function setFloor(asset, val) { assetFloors[asset]=+val/100; document.getElement
 function setCap(asset, val)   { assetCaps[asset]=+val/100;   document.getElementById(`acv-${asset}`).textContent=val+'%'; }
 function updateSectorCap(type, val) { sectorCaps[type]=+val/100; document.getElementById(`scapv-${type}`).textContent=val+'%'; }
 function liveParam(key, val) {
-  if(lockedParams[key]) return; // ignore slider if locked
+  if(lockedParams[key]) return;
   params[key]=parseFloat(val);
   document.getElementById(`dv-${key}`).textContent = key==='n' ? Math.round(params.n) : params[key].toFixed(2);
 }
@@ -120,17 +121,11 @@ function toggleLock(key) {
   const btn=document.getElementById(`lock-${key}`);
   const slider=document.getElementById(`sl-${key}`);
   if(lockedParams[key]){
-    btn.textContent='🔒';
-    btn.style.borderColor='var(--amber)';
-    btn.style.color='var(--amber)';
-    slider.style.opacity='0.4';
-    slider.disabled=true;
+    btn.textContent='🔒';btn.style.borderColor='var(--amber)';btn.style.color='var(--amber)';
+    slider.style.opacity='0.4';slider.disabled=true;
   } else {
-    btn.textContent='🔓';
-    btn.style.borderColor='var(--border)';
-    btn.style.color='var(--subtle)';
-    slider.style.opacity='1';
-    slider.disabled=false;
+    btn.textContent='🔓';btn.style.borderColor='var(--border)';btn.style.color='var(--subtle)';
+    slider.style.opacity='1';slider.disabled=false;
   }
 }
 
@@ -139,16 +134,11 @@ function addComparison() {
   if(comparisons.find(c=>c.asset===asset)) return;
   comparisons.push({asset, color:CC[comparisons.length%CC.length]});
   s.value=''; renderCompList();
-  sensiCache={};
-  _doBacktest(params.alpha,params.mcbeta,params.n);
-  renderCumReturn();
+  sensiCache={};_doBacktest(params.alpha,params.mcbeta,params.n);renderCumReturn();
 }
 function removeComparison(asset) {
-  comparisons=comparisons.filter(c=>c.asset!==asset);
-  renderCompList();
-  sensiCache={};
-  _doBacktest(params.alpha,params.mcbeta,params.n);
-  renderCumReturn();
+  comparisons=comparisons.filter(c=>c.asset!==asset); renderCompList();
+  sensiCache={};_doBacktest(params.alpha,params.mcbeta,params.n);renderCumReturn();
 }
 function renderCompList() {
   const el=document.getElementById('comp-list');
@@ -169,8 +159,7 @@ function computeWeights(rx, ry, availAssets, alpha, mcBeta, N) {
   const scored=[];
   for (const a of ASSETS) {
     if(!availAssets.includes(a.asset)) continue;
-    // Exclude entirely if sector cap is zero
-    if((sectorCaps[a.type]||1)<=0) continue;
+    if((sectorCaps[a.type]||1)<=0) continue; // sector hard-excluded
     const dist=Math.hypot(a.x-rx, a.y-ry);
     const score=(1/(Math.pow(dist,alpha)+eps))*Math.pow(a.confMult,mcBeta);
     const cap  =assetCaps[a.asset]   !== undefined ? assetCaps[a.asset]   : 1;
@@ -300,8 +289,8 @@ function runOptimise() {
   document.getElementById('opt-status').textContent=sf>0?`Searching (Sharpe ≥ ${sf})…`:'Searching…';
   setTimeout(()=>{
     const alphas=lockedParams.alpha?[params.alpha]:[0.2,0.5,0.8,1.0,1.5,2.0,3.0,4.0];
-    const betas =lockedParams.mcbeta?[params.mcbeta]:[0,0.25,0.5,0.75,1.0];
-    const ns    =lockedParams.n?[params.n]:[5,8,10,12,15,18,20];
+    const betas=lockedParams.mcbeta?[params.mcbeta]:[0,0.25,0.5,0.75,1.0];
+    const ns=lockedParams.n?[params.n]:[5,8,10,12,15,18,20];
     let best={score:-Infinity,alpha:1,mcbeta:0,n:15,sharpe:0};let feasible=0;
     for(const a of alphas)for(const b of betas)for(const n of ns){
       _doBacktest(a,b,n);
@@ -400,7 +389,7 @@ function renderRiver() {
   const x=filtered.map(r=>r.month);
   const totals={};
   for(const ma of filteredMa)for(const[a,v] of Object.entries(ma))totals[a]=(totals[a]||0)+v;
-  // Only show assets currently in the portfolio (last quarter of window)
+  // Only show assets currently held in last quarter of window
   const qKeys=Object.keys(quarterly).filter(qk=>qk>=startDate&&qk<=endDate).sort();
   const lastQk=qKeys[qKeys.length-1];
   const currentHoldings=new Set((quarterly[lastQk]?.holdings||[]).map(h=>h.asset));
@@ -765,178 +754,10 @@ function updateRightPanel() {
 }
 
 // ═══════════════════════════════════════
-// KEYBOARD
-// ═══════════════════════════════════════
-document.addEventListener('keydown',e=>{
-  if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName))return;
-  if(e.key==='1')showTab('main');
-  if(e.key==='2')showTab('years');
-  if(e.key==='3')showTab('attribution');
-  if(e.key==='4')showTab('map');
-  if(e.key==='5')showTab('sensitivity');
-  if(e.key==='6')showTab('portfolio');
-  if(e.key==='l'||e.key==='L')toggleLog();
-  if(e.key==='Escape'){closeSnap();document.querySelectorAll('.cap-popup').forEach(el=>el.remove());}
-});
-
-function onDateChange() {
-  const sd=document.getElementById('start-date').value;
-  const ed=document.getElementById('end-date').value;
-  if(sd) startDate=sd;
-  if(ed) endDate=ed;
-  sensiCache={};
-  _doBacktest(params.alpha,params.mcbeta,params.n);
-  refreshAll();
-}
-
-function syncDatePicker(prefix) {
-  const m=document.getElementById(prefix+'-month').value;
-  const y=document.getElementById(prefix+'-year').value;
-  const val=y+'-'+m;
-  document.getElementById(prefix+'-date').value=val;
-  if(prefix==='start') startDate=val;
-  else endDate=val;
-  sensiCache={};
-  _doBacktest(params.alpha,params.mcbeta,params.n);
-  refreshAll();
-}
-
-// ═══════════════════════════════════════
-// PORTFOLIO TAB
-// ═══════════════════════════════════════
-function getCurrentRegimeCoords() {
-  const qKeys=Object.keys(quarterly).filter(qk=>qk>=startDate&&qk<=endDate).sort();
-  if(!qKeys.length) return null;
-  return quarterly[qKeys[qKeys.length-1]]||null;
-}
-
-function renderPortfolio() {
-  const q=getCurrentRegimeCoords();
-  if(!q){
-    const tb=document.getElementById('port-holdings-body');
-    if(tb) tb.innerHTML='<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--subtle);">No data in selected window</td></tr>';
-    return;
-  }
-  const pill=document.getElementById('port-regime-pill');
-  const coord=document.getElementById('port-regime-coord');
-  if(pill){pill.textContent=q.quadrant;pill.className=`rpill rpill-${q.quadrant.charAt(0)}`;}
-  if(coord) coord.textContent=`(${q.rx.toFixed(2)}, ${q.ry.toFixed(2)})`;
-
-  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
-  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
-  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
-
-  // Holdings table
-  const tbody=document.getElementById('port-holdings-body');
-  if(!tbody) return;
-  tbody.innerHTML=holdings.map((h,i)=>{
-    const wPct=(h.weight*100).toFixed(1);
-    const barW=Math.round(h.weight*100);
-    const distCol=h.dist<1.5?'var(--green)':h.dist<3?'var(--amber)':'var(--muted)';
-    const a=ASSETS.find(x=>x.asset===h.asset);
-    const score=((1/(Math.pow(h.dist,params.alpha)+0.1))*Math.pow(a?.confMult||1,params.mcbeta)).toFixed(2);
-    return`<tr style="border-bottom:1px solid var(--border);" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
-      <td style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--subtle);">${i+1}</td>
-      <td style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text);">${h.asset}</td>
-      <td style="padding:6px 12px;"><span class="badge badge-${h.type}">${h.type.slice(0,3)}</span></td>
-      <td style="padding:6px 12px;text-align:right;font-family:var(--mono);font-size:10px;color:${distCol};">${h.dist.toFixed(2)}</td>
-      <td style="padding:6px 12px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">${score}</td>
-      <td style="padding:6px 12px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <div style="flex:1;height:4px;background:var(--surface3);border-radius:2px;overflow:hidden;">
-            <div style="height:100%;width:${barW}%;background:${TC[h.type]};border-radius:2px;"></div>
-          </div>
-          <span style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text);min-width:38px;text-align:right;">${wPct}%</span>
-        </div>
-      </td>
-    </tr>`;
-  }).join('');
-
-  // Sector totals
-  const sectorTotals={};
-  for(const h of holdings) sectorTotals[h.type]=(sectorTotals[h.type]||0)+h.weight;
-
-  // Donut
-  const donutEl=document.getElementById('port-donut');
-  if(donutEl){
-    const sectors=Object.entries(sectorTotals).sort((a,b)=>b[1]-a[1]);
-    Plotly.react('port-donut',
-      [{labels:sectors.map(([t])=>t),values:sectors.map(([,v])=>+(v*100).toFixed(1)),
-        type:'pie',hole:0.55,
-        marker:{colors:sectors.map(([t])=>TC[t]||'#888'),line:{color:'#0C0C0F',width:2}},
-        textfont:{size:9,color:'#F0EFF8'},textinfo:'label+percent',
-        hovertemplate:'%{label}: %{value:.1f}%<extra></extra>'}],
-      {paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',
-       margin:{l:4,r:4,t:4,b:4},showlegend:false,
-       font:{family:"'DM Mono',monospace",size:9,color:'#8888AA'}},
-      {displayModeBar:false,responsive:true}
-    );
-  }
-
-  // Sector bars
-  const barsEl=document.getElementById('port-sector-bars');
-  if(barsEl){
-    barsEl.innerHTML=Object.entries(sectorTotals).sort((a,b)=>b[1]-a[1]).map(([type,w])=>`
-      <div style="margin-bottom:7px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
-          <span style="font-size:10px;color:${TC[type]};font-weight:600;">${type}</span>
-          <span style="font-family:var(--mono);font-size:10px;color:var(--muted);">${(w*100).toFixed(1)}%</span>
-        </div>
-        <div style="height:4px;background:var(--surface3);border-radius:2px;overflow:hidden;">
-          <div style="height:100%;width:${(w*100).toFixed(1)}%;background:${TC[type]};border-radius:2px;"></div>
-        </div>
-      </div>`).join('');
-  }
-
-  // Stats
-  const statsEl=document.getElementById('port-stats-grid');
-  if(statsEl){
-    const avgDist=holdings.length?(holdings.reduce((s,h)=>s+h.dist,0)/holdings.length).toFixed(2):'—';
-    statsEl.innerHTML=[
-      ['N held',holdings.length],
-      ['Top asset',holdings[0]?.asset||'—'],
-      ['Top weight',holdings[0]?(holdings[0].weight*100).toFixed(1)+'%':'—'],
-      ['Avg dist',avgDist],
-    ].map(([l,v])=>`
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:6px 8px;">
-        <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);">${l}</div>
-        <div style="font-family:var(--mono);font-size:13px;font-weight:500;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${v}</div>
-      </div>`).join('');
-  }
-}
-
-function exportPortfolioJSON() {
-  const q=getCurrentRegimeCoords(); if(!q) return;
-  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
-  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
-  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
-  const data={generated:new Date().toISOString(),regime:q.quadrant,coords:{rx:q.rx,ry:q.ry},
-    params:{...params},window:{start:startDate,end:endDate},
-    holdings:holdings.map(h=>({asset:h.asset,type:h.type,weight:+(h.weight*100).toFixed(2),dist:+h.dist.toFixed(3)}))};
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
-  a.download=`marc-portfolio-${q.quadrant.toLowerCase()}-${new Date().toISOString().slice(0,10)}.json`;
-  a.click();
-}
-
-function copyPortfolioCSV() {
-  const q=getCurrentRegimeCoords(); if(!q) return;
-  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
-  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
-  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
-  const rows=['Asset,Type,Weight %,Distance'];
-  holdings.forEach(h=>rows.push(`${h.asset},${h.type},${(h.weight*100).toFixed(2)},${h.dist.toFixed(3)}`));
-  navigator.clipboard.writeText(rows.join('\n')).then(()=>{
-    const btn=document.getElementById('csv-btn');
-    if(btn){const o=btn.textContent;btn.textContent='✓ Copied';setTimeout(()=>btn.textContent=o,1500);}
-  });
-}
-
-// ═══════════════════════════════════════
-// TAB + PANEL
+// TAB + PANEL CONTROLS
 // ═══════════════════════════════════════
 function showTab(id){
-  document.querySelectorAll('.tab-btn').forEach((t,i)=>t.classList.toggle('active',['main','years','attribution','map','sensitivity','portfolio'][i]===id));
+  document.querySelectorAll('.tab-btn').forEach((t,i)=>t.classList.toggle('active',['main','years','attribution','map','sensitivity','portfolio','regime-calc'][i]===id));
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
   document.getElementById(`tab-${id}`).classList.add('active');
   if(id==='years')renderYearCards();
@@ -946,14 +767,12 @@ function showTab(id){
   if(id==='portfolio')renderPortfolio();
   setTimeout(()=>window.dispatchEvent(new Event('resize')),50);
 }
-
 function togglePanel(side){
   const el=document.getElementById(`${side}-panel`);
   el.classList.toggle('collapsed');
   const btn=document.getElementById(`${side==='left'?'l':'r'}panel-btn`);
   btn.style.opacity=el.classList.contains('collapsed')?'.5':'1';
 }
-
 function toggleGuide(){
   guideOpen=!guideOpen;
   document.getElementById('guide-body').style.display=guideOpen?'grid':'none';
@@ -971,8 +790,169 @@ function refreshAll(){
   if(active.includes('attr'))renderAttributionTab();
   if(active.includes('map'))renderMap();
   if(active.includes('sens'))renderSensitivity();
-  if(active.includes('portfolio')||active.includes('⬡'))renderPortfolio();
+  if(active.includes('portfolio')||active.includes('\u2b21'))renderPortfolio();
   if(showElig)renderEligibility();
+}
+
+// ═══════════════════════════════════════
+// KEYBOARD
+// ═══════════════════════════════════════
+document.addEventListener('keydown',e=>{
+  if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName))return;
+  if(e.key==='1')showTab('main');if(e.key==='2')showTab('years');
+  if(e.key==='3')showTab('attribution');if(e.key==='4')showTab('map');
+  if(e.key==='5')showTab('sensitivity');if(e.key==='6')showTab('portfolio');
+  if(e.key==='7')showTab('regime-calc');
+  if(e.key==='l'||e.key==='L')toggleLog();
+  if(e.key==='Escape'){closeSnap();document.querySelectorAll('.cap-popup').forEach(el=>el.remove());}
+});
+
+function onDateChange(){
+  const sd=document.getElementById('start-date').value;
+  const ed=document.getElementById('end-date').value;
+  if(sd)startDate=sd;if(ed)endDate=ed;
+  sensiCache={};_doBacktest(params.alpha,params.mcbeta,params.n);refreshAll();
+}
+function syncDatePicker(prefix){
+  const m=document.getElementById(prefix+'-month').value;
+  const y=document.getElementById(prefix+'-year').value;
+  const val=y+'-'+m;
+  document.getElementById(prefix+'-date').value=val;
+  if(prefix==='start')startDate=val;else endDate=val;
+  sensiCache={};_doBacktest(params.alpha,params.mcbeta,params.n);refreshAll();
+}
+
+// ═══════════════════════════════════════
+// REGIME CALCULATOR (exact Excel formulas)
+// ═══════════════════════════════════════
+function computeRegimeCalc(){
+  const gdp=parseFloat(document.getElementById('rc-gdp').value);
+  const pmi=parseFloat(document.getElementById('rc-pmi').value);
+  const unemp=parseFloat(document.getElementById('rc-unemp').value);
+  const retail=parseFloat(document.getElementById('rc-retail').value);
+  const cpi=parseFloat(document.getElementById('rc-cpi').value);
+  const pce=parseFloat(document.getElementById('rc-pce').value);
+  if([gdp,pmi,unemp,retail,cpi,pce].some(isNaN)){alert('Fill in all 6 indicators.');return;}
+  const h=Math.max(-7,Math.min(7,(gdp*100-1)*3));
+  const i=Math.max(-7,Math.min(7,(pmi-50)*0.65));
+  const j=Math.max(-7,Math.min(7,(unemp-4.5)*2.8*-1));
+  const k=Math.max(-7,Math.min(7,(retail-0.3)*2));
+  const l=Math.max(-7,Math.min(7,(cpi-2.5)*2));
+  const mn=Math.max(-7,Math.min(7,(pce-2)*2));
+  const x=(h*2+i*3+j*2+k*1)/8;
+  const y2=(l*3+mn*2)/5;
+  const quad=x>=0&&y2<0?'Expansion':x<0&&y2<0?'Deflation':x>=0&&y2>=0?'Reflation':'Stagflation';
+  const qc={Expansion:'var(--green)',Deflation:'var(--blue)',Reflation:'var(--amber)',Stagflation:'var(--red)'}[quad];
+  document.getElementById('rc-x').textContent=x.toFixed(4);
+  document.getElementById('rc-x').style.color=x>=0?'var(--green)':'var(--red)';
+  document.getElementById('rc-y').textContent=y2.toFixed(4);
+  document.getElementById('rc-y').style.color=y2<0?'var(--green)':'var(--red)';
+  document.getElementById('rc-quadrant').textContent=quad;
+  document.getElementById('rc-quadrant').style.color=qc;
+  document.getElementById('rc-breakdown').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;">
+    <span style="color:var(--subtle)">GDP norm (H):</span><span>${h.toFixed(4)}</span>
+    <span style="color:var(--subtle)">PMI norm (I):</span><span>${i.toFixed(4)}</span>
+    <span style="color:var(--subtle)">Unemp norm (J):</span><span>${j.toFixed(4)}</span>
+    <span style="color:var(--subtle)">Retail norm (K):</span><span>${k.toFixed(4)}</span>
+    <span style="color:var(--subtle)">CPI norm (L):</span><span>${l.toFixed(4)}</span>
+    <span style="color:var(--subtle)">PCE norm (M):</span><span>${mn.toFixed(4)}</span>
+    <span style="color:var(--subtle);font-weight:600">X=(H*2+I*3+J*2+K*1)/8:</span><span style="font-weight:600;color:${x>=0?'var(--green)':'var(--red)'}">${x.toFixed(4)}</span>
+    <span style="color:var(--subtle);font-weight:600">Y=(L*3+M*2)/5:</span><span style="font-weight:600;color:${y2<0?'var(--green)':'var(--red)'}">${y2.toFixed(4)}</span>
+  </div>`;
+  regimeCalcCoords={rx:parseFloat(x.toFixed(4)),ry:parseFloat(y2.toFixed(4)),quadrant:quad};
+  document.getElementById('rc-result').style.display='block';
+  document.getElementById('rc-empty').style.display='none';
+}
+function applyRegimeToPortfolio(){
+  if(!regimeCalcCoords){alert('Compute regime first.');return;}
+  const qKeys=Object.keys(quarterly).sort();
+  quarterly[qKeys[qKeys.length-1]]={...quarterly[qKeys[qKeys.length-1]],...regimeCalcCoords};
+  showTab('portfolio');
+}
+
+// ═══════════════════════════════════════
+// PORTFOLIO TAB
+// ═══════════════════════════════════════
+function getCurrentRegimeCoords(){
+  const qKeys=Object.keys(quarterly).filter(qk=>qk>=startDate&&qk<=endDate).sort();
+  if(!qKeys.length)return null;
+  return quarterly[qKeys[qKeys.length-1]]||null;
+}
+function renderPortfolio(){
+  const q=getCurrentRegimeCoords();
+  if(!q){const tb=document.getElementById('port-holdings-body');if(tb)tb.innerHTML='<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--subtle);">No data in selected window</td></tr>';return;}
+  const pill=document.getElementById('port-regime-pill');
+  const coord=document.getElementById('port-regime-coord');
+  if(pill){pill.textContent=q.quadrant;pill.className=`rpill rpill-${q.quadrant.charAt(0)}`;}
+  if(coord)coord.textContent=`(${q.rx.toFixed(4)}, ${q.ry.toFixed(4)})`;
+  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
+  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
+  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
+  const tbody=document.getElementById('port-holdings-body');
+  if(!tbody)return;
+  tbody.innerHTML=holdings.map((h,idx)=>{
+    const wPct=(h.weight*100).toFixed(1);
+    const barW=Math.round(h.weight*100);
+    const distCol=h.dist<1.5?'var(--green)':h.dist<3?'var(--amber)':'var(--muted)';
+    const a=ASSETS.find(x=>x.asset===h.asset);
+    const score=((1/(Math.pow(h.dist,params.alpha)+0.1))*Math.pow(a?.confMult||1,params.mcbeta)).toFixed(2);
+    return`<tr style="border-bottom:1px solid var(--border);" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+      <td style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--subtle);">${idx+1}</td>
+      <td style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text);">${h.asset}</td>
+      <td style="padding:6px 12px;"><span class="badge badge-${h.type}">${h.type.slice(0,3)}</span></td>
+      <td style="padding:6px 12px;text-align:right;font-family:var(--mono);font-size:10px;color:${distCol};">${h.dist.toFixed(2)}</td>
+      <td style="padding:6px 12px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">${score}</td>
+      <td style="padding:6px 12px;"><div style="display:flex;align-items:center;gap:8px;">
+        <div style="flex:1;height:4px;background:var(--surface3);border-radius:2px;overflow:hidden;">
+          <div style="height:100%;width:${barW}%;background:${TC[h.type]};border-radius:2px;"></div>
+        </div>
+        <span style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text);min-width:38px;text-align:right;">${wPct}%</span>
+      </div></td>
+    </tr>`;
+  }).join('');
+  const sectorTotals={};
+  for(const h of holdings)sectorTotals[h.type]=(sectorTotals[h.type]||0)+h.weight;
+  const donutEl=document.getElementById('port-donut');
+  if(donutEl){
+    const sectors=Object.entries(sectorTotals).sort((a,b)=>b[1]-a[1]);
+    Plotly.react('port-donut',[{labels:sectors.map(([t])=>t),values:sectors.map(([,v])=>+(v*100).toFixed(1)),type:'pie',hole:0.55,marker:{colors:sectors.map(([t])=>TC[t]||'#888'),line:{color:'#0C0C0F',width:2}},textfont:{size:9,color:'#F0EFF8'},textinfo:'label+percent',hovertemplate:'%{label}: %{value:.1f}%<extra></extra>'}],{paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',margin:{l:4,r:4,t:4,b:4},showlegend:false,font:{family:"'DM Mono',monospace",size:9,color:'#8888AA'}},{displayModeBar:false,responsive:true});
+  }
+  const barsEl=document.getElementById('port-sector-bars');
+  if(barsEl)barsEl.innerHTML=Object.entries(sectorTotals).sort((a,b)=>b[1]-a[1]).map(([type,w])=>`<div style="margin-bottom:7px;"><div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="font-size:10px;color:${TC[type]};font-weight:600;">${type}</span><span style="font-family:var(--mono);font-size:10px;color:var(--muted);">${(w*100).toFixed(1)}%</span></div><div style="height:4px;background:var(--surface3);border-radius:2px;overflow:hidden;"><div style="height:100%;width:${(w*100).toFixed(1)}%;background:${TC[type]};border-radius:2px;"></div></div></div>`).join('');
+  const statsEl=document.getElementById('port-stats-grid');
+  if(statsEl){
+    const avgDist=holdings.length?(holdings.reduce((s,h)=>s+h.dist,0)/holdings.length).toFixed(2):'—';
+    statsEl.innerHTML=[['N held',holdings.length],['Top asset',holdings[0]?.asset||'—'],['Top weight',holdings[0]?(holdings[0].weight*100).toFixed(1)+'%':'—'],['Avg dist',avgDist]].map(([l,v])=>`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:6px 8px;"><div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);">${l}</div><div style="font-family:var(--mono);font-size:13px;font-weight:500;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${v}</div></div>`).join('');
+  }
+}
+function exportPortfolioJSON(){
+  const q=getCurrentRegimeCoords();if(!q)return;
+  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
+  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
+  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
+  const data={generated:new Date().toISOString(),regime:q.quadrant,coords:{rx:q.rx,ry:q.ry},params:{...params},window:{start:startDate,end:endDate},holdings:holdings.map(h=>({asset:h.asset,type:h.type,weight:+(h.weight*100).toFixed(2),dist:+h.dist.toFixed(3)}))};
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download=`marc-portfolio-${q.quadrant.toLowerCase()}-${new Date().toISOString().slice(0,10)}.json`;a.click();
+}
+function copyPortfolioCSV(){
+  const q=getCurrentRegimeCoords();if(!q)return;
+  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
+  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
+  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
+  const rows=['Asset,Type,Weight %,Distance'];
+  holdings.forEach(h=>rows.push(`${h.asset},${h.type},${(h.weight*100).toFixed(2)},${h.dist.toFixed(3)}`));
+  navigator.clipboard.writeText(rows.join('\n')).then(()=>{const btn=document.getElementById('csv-btn');if(btn){const o=btn.textContent;btn.textContent='\u2713 Copied';setTimeout(()=>btn.textContent=o,1500);}});
+}
+function exportForAgent(){
+  const q=getCurrentRegimeCoords();if(!q)return;
+  const lastQk=Object.keys(ALL_QUARTERLY).filter(qk=>qk<=endDate).sort().pop()||endDate;
+  const avail=ASSETS.filter(a=>a.first_data&&a.first_data<=lastQk).map(a=>a.asset);
+  const holdings=computeWeights(q.rx,q.ry,avail,params.alpha,params.mcbeta,params.n);
+  const today=new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+  const lines=[`MARC SNAPSHOT \u2014 ${today}`,'═══════════════════════════════','REGIME',`Quadrant: ${q.quadrant}`,`Growth score (X): ${q.rx.toFixed(4)} | Inflation score (Y): ${q.ry.toFixed(4)}`,'','PARAMETERS',`Alpha: ${params.alpha} | N: ${Math.round(params.n)} | mcBeta: ${params.mcbeta}`,`Window: ${startDate} \u2192 ${endDate}`,'','MODEL PORTFOLIO (target weights)',...holdings.map(h=>`${h.asset}: ${(h.weight*100).toFixed(1)}%`),'═══════════════════════════════'];
+  const text=lines.join('\n');
+  const btn=document.getElementById('agent-btn');
+  if(navigator.clipboard){navigator.clipboard.writeText(text).then(()=>{if(btn){const o=btn.textContent;btn.textContent='\u2713 Copied!';btn.style.borderColor='var(--amber)';btn.style.color='var(--amber)';setTimeout(()=>{btn.textContent=o;btn.style.borderColor='var(--green)';btn.style.color='var(--green)';},2000);}});}
+  else{window.prompt('Copy this snapshot:',text);}
 }
 
 // ═══════════════════════════════════════
@@ -980,8 +960,7 @@ function refreshAll(){
 // ═══════════════════════════════════════
 document.addEventListener('DOMContentLoaded',function(){
   const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const years=[];
-  for(let y=2010;y<=2025;y++) years.push(y);
+  const years=[];for(let y=2010;y<=2026;y++)years.push(y);
   function buildSelects(prefix,defaultVal){
     const [dYear,dMonth]=defaultVal.split('-').map(Number);
     const mSel=document.getElementById(prefix+'-month');
@@ -990,14 +969,11 @@ document.addEventListener('DOMContentLoaded',function(){
     ySel.innerHTML=years.map(y=>`<option value="${y}" ${y===dYear?'selected':''}>${y}</option>`).join('');
   }
   buildSelects('start','2010-01');
-  buildSelects('end','2025-12');
+  buildSelects('end','2026-03');
   document.getElementById('start-date').addEventListener('change',onDateChange);
   document.getElementById('start-date').addEventListener('input',onDateChange);
   document.getElementById('end-date').addEventListener('change',onDateChange);
   document.getElementById('end-date').addEventListener('input',onDateChange);
-  initAssetConstraints();
-  initCompSelect();
-  renderCompList();
-  _doBacktest(params.alpha,params.mcbeta,params.n);
-  refreshAll();
+  initAssetConstraints();initCompSelect();renderCompList();
+  _doBacktest(params.alpha,params.mcbeta,params.n);refreshAll();
 });
