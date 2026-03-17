@@ -82,10 +82,10 @@ function getModelWeights() {
 function showNavSection() {
   var navSection = document.getElementById('nav-section');
   if (!navSection) return;
-  var isVisible = navSection.style.display !== 'none';
+  var isVisible = navSection.style.display === 'flex';
   navSection.style.display = isVisible ? 'none' : 'flex';
   var btn = document.querySelector('[onclick="showNavSection()"]');
-  if (btn) btn.style.opacity = isVisible ? '1' : '.5';
+  if (btn) btn.style.background = isVisible ? '' : 'var(--green-dim)';
   if (!isVisible) {
     renderNavRegimePanel();
     renderNavDashboard();
