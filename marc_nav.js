@@ -22,11 +22,289 @@ var navState = {
 };
 
 // ── Storage ────────────────────────────────────────────────────────────────
-function navLoad() {
-  try { return JSON.parse(localStorage.getItem('marc_nav') || '{"trades":[],"prices":{}}'); }
-  catch(e) { return {trades:[], prices:{}}; }
+// ═══════════════════════════════════════════════════════════════════
+// DATA LAYER — Supabase-backed with local cache for sync compatibility
+// ═══════════════════════════════════════════════════════════════════
+
+var _marcDB = {
+  jwt: null,          // Supabase JWT after login
+  activeFund: null,   // {id, name, type, color}
+  funds: [],          // All funds
+  cache: {            // Local in-memory cache (mirrors DB)
+    trades: [],
+    prices: {},
+    messages: [],     // CIO chat history for active fund
+    lastFetched: null,
+    snapshots: []
+  }
+};
+
+// Get base URL for worker calls
+function _api() { return _proxyUrl().replace(/\/+$/, ''); }
+
+// Auth headers for DB calls
+function _authHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': _marcDB.jwt ? 'Bearer ' + _marcDB.jwt : '',
+    'Origin': 'https://mtc-ash.github.io'
+  };
 }
-function navSave(data) { localStorage.setItem('marc_nav', JSON.stringify(data)); }
+
+// ── navLoad/navSave: backward-compatible sync interface ──────────
+// Returns the local cache synchronously — background sync handles DB
+function navLoad() {
+  var c = _marcDB.cache;
+  return {
+    trades: c.trades || [],
+    prices: c.prices || {},
+    lastFetched: c.lastFetched,
+    fundId: _marcDB.activeFund ? _marcDB.activeFund.id : null
+  };
+}
+
+function navSave(data) {
+  // Update local cache immediately (sync)
+  if (data.trades !== undefined) _marcDB.cache.trades = data.trades;
+  if (data.prices !== undefined) _marcDB.cache.prices = data.prices;
+  if (data.lastFetched !== undefined) _marcDB.cache.lastFetched = data.lastFetched;
+  // LocalStorage fallback (for offline / pre-login)
+  try { localStorage.setItem('marc_nav_cache', JSON.stringify(_marcDB.cache)); } catch(e) {}
+}
+
+// ── Supabase auth ────────────────────────────────────────────────
+async function dbLogin(email, password) {
+  const r = await fetch(_api() + '/auth/login', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','Origin':'https://mtc-ash.github.io'},
+    body: JSON.stringify({email, password})
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  _marcDB.jwt = d.access_token;
+  // Persist token
+  try { localStorage.setItem('marc_jwt', d.access_token); } catch(e) {}
+  return d;
+}
+
+async function dbVerifyToken(token) {
+  _marcDB.jwt = token;
+  const r = await fetch(_api() + '/auth/verify', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','Authorization':'Bearer '+token,'Origin':'https://mtc-ash.github.io'}
+  });
+  const d = await r.json();
+  if (d.error) { _marcDB.jwt = null; throw new Error(d.error); }
+  return d.user;
+}
+
+// ── Fund management ──────────────────────────────────────────────
+async function dbLoadFunds() {
+  const r = await fetch(_api() + '/db/funds', {headers: _authHeaders()});
+  const funds = await r.json();
+  if (funds.error) throw new Error(funds.error);
+  _marcDB.funds = Array.isArray(funds) ? funds : [];
+  return _marcDB.funds;
+}
+
+async function dbCreateFund(name, type, color) {
+  const r = await fetch(_api() + '/db/funds', {
+    method: 'POST',
+    headers: _authHeaders(),
+    body: JSON.stringify({name, type, color: color||'#00D68F'})
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  const fund = Array.isArray(d) ? d[0] : d;
+  _marcDB.funds.push(fund);
+  return fund;
+}
+
+async function dbSetActiveFund(fund) {
+  _marcDB.activeFund = fund;
+  try { localStorage.setItem('marc_active_fund', JSON.stringify(fund)); } catch(e) {}
+  await dbLoadTrades(fund.id);
+  await dbLoadMessages(fund.id);
+}
+
+// ── Trade persistence ────────────────────────────────────────────
+async function dbLoadTrades(fundId) {
+  if (!_marcDB.jwt) return;
+  const fid = fundId || (_marcDB.activeFund ? _marcDB.activeFund.id : null);
+  if (!fid) return;
+  const r = await fetch(_api() + '/db/trades?fund_id=' + fid, {headers: _authHeaders()});
+  const trades = await r.json();
+  if (!Array.isArray(trades)) return;
+  // Normalise DB format to app format
+  _marcDB.cache.trades = trades.map(function(t) {
+    return {
+      id: t.id, asset: t.asset, direction: t.direction,
+      date: t.date, qty: parseFloat(t.qty), price: parseFloat(t.price),
+      notes: t.notes||'', ts: new Date(t.created_at).getTime()
+    };
+  });
+  try { localStorage.setItem('marc_nav_cache', JSON.stringify(_marcDB.cache)); } catch(e) {}
+}
+
+async function dbSaveTrade(trade) {
+  if (!_marcDB.jwt || !_marcDB.activeFund) {
+    // Fallback: local only
+    _marcDB.cache.trades.push(trade);
+    navSave({trades: _marcDB.cache.trades});
+    return trade;
+  }
+  const r = await fetch(_api() + '/db/trades', {
+    method: 'POST',
+    headers: _authHeaders(),
+    body: JSON.stringify({
+      fund_id: _marcDB.activeFund.id,
+      asset: trade.asset, direction: trade.direction,
+      date: trade.date, qty: trade.qty, price: trade.price,
+      notes: trade.notes || ''
+    })
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  const saved = Array.isArray(d) ? d[0] : d;
+  const normalised = {
+    id: saved.id, asset: saved.asset, direction: saved.direction,
+    date: saved.date, qty: parseFloat(saved.qty), price: parseFloat(saved.price),
+    notes: saved.notes||'', ts: new Date(saved.created_at).getTime()
+  };
+  _marcDB.cache.trades.push(normalised);
+  try { localStorage.setItem('marc_nav_cache', JSON.stringify(_marcDB.cache)); } catch(e) {}
+  return normalised;
+}
+
+async function dbDeleteTrade(id) {
+  _marcDB.cache.trades = _marcDB.cache.trades.filter(function(t){return t.id!==id;});
+  navSave({trades: _marcDB.cache.trades});
+  if (!_marcDB.jwt) return;
+  await fetch(_api() + '/db/trades/' + id, {method:'DELETE', headers:_authHeaders()});
+}
+
+// ── Price persistence ────────────────────────────────────────────
+async function dbSavePrices(prices) {
+  // Update cache
+  Object.assign(_marcDB.cache.prices, prices);
+  _marcDB.cache.lastFetched = new Date().toISOString();
+  navSave({prices: _marcDB.cache.prices, lastFetched: _marcDB.cache.lastFetched});
+  // Push to DB so other devices see same prices
+  if (!_marcDB.jwt) return;
+  const rows = Object.entries(prices).map(function(kv) {
+    var p = kv[1];
+    return {asset:kv[0], price:p.price, change_24h:p.change24h||0,
+            change_7d:p.change7d||0, market_cap:p.marketCap||0,
+            volume_24h:p.volume24h||0, source:p.source||'', updated_at:new Date().toISOString()};
+  });
+  if (rows.length) {
+    await fetch(_api() + '/db/prices', {
+      method:'POST', headers:_authHeaders(), body:JSON.stringify(rows)
+    });
+  }
+}
+
+async function dbLoadPrices() {
+  if (!_marcDB.jwt) return;
+  const r = await fetch(_api() + '/db/prices', {headers:_authHeaders()});
+  const rows = await r.json();
+  if (!Array.isArray(rows)) return;
+  rows.forEach(function(row) {
+    _marcDB.cache.prices[row.asset] = {
+      price: parseFloat(row.price), change24h: parseFloat(row.change_24h)||0,
+      change7d: parseFloat(row.change_7d)||0, marketCap: parseFloat(row.market_cap)||0,
+      volume24h: parseFloat(row.volume_24h)||0, source: row.source||'db',
+      updatedAt: row.updated_at
+    };
+  });
+  _marcDB.cache.lastFetched = rows.length ? rows[0].updated_at : null;
+}
+
+// ── Agent message persistence ────────────────────────────────────
+async function dbLoadMessages(fundId) {
+  if (!_marcDB.jwt) return;
+  const fid = fundId || (_marcDB.activeFund ? _marcDB.activeFund.id : null);
+  if (!fid) return;
+  const r = await fetch(_api() + '/db/messages?fund_id=' + fid + '&limit=100', {headers:_authHeaders()});
+  const msgs = await r.json();
+  if (!Array.isArray(msgs)) return;
+  _marcDB.cache.messages = msgs.map(function(m) {
+    return {id:m.id, role:m.role, content:m.content, ts:new Date(m.created_at).getTime()};
+  });
+}
+
+async function dbSaveMessage(role, content, fundId) {
+  const fid = fundId || (_marcDB.activeFund ? _marcDB.activeFund.id : null);
+  var msg = {role:role, content:content, ts:Date.now()};
+  if (!fid || !_marcDB.jwt) {
+    _marcDB.cache.messages.push(msg);
+    return msg;
+  }
+  const r = await fetch(_api() + '/db/messages', {
+    method:'POST', headers:_authHeaders(),
+    body: JSON.stringify({fund_id:fid, role:role, content:content})
+  });
+  const d = await r.json();
+  const saved = Array.isArray(d) ? d[0] : d;
+  msg.id = saved.id;
+  _marcDB.cache.messages.push(msg);
+  return msg;
+}
+
+async function dbClearMessages(fundId) {
+  const fid = fundId || (_marcDB.activeFund ? _marcDB.activeFund.id : null);
+  _marcDB.cache.messages = [];
+  if (!fid || !_marcDB.jwt) return;
+  await fetch(_api() + '/db/messages?fund_id=' + fid, {method:'DELETE', headers:_authHeaders()});
+}
+
+// ── NAV snapshot ─────────────────────────────────────────────────
+async function dbSaveSnapshot(nav, cost, pnl, regime) {
+  const fid = _marcDB.activeFund ? _marcDB.activeFund.id : null;
+  if (!fid || !_marcDB.jwt) return;
+  await fetch(_api() + '/db/snapshot', {
+    method:'POST', headers:_authHeaders(),
+    body: JSON.stringify({fund_id:fid, nav:nav, total_cost:cost, pnl:pnl, regime:regime||''})
+  });
+}
+
+// ── Init: restore session ────────────────────────────────────────
+async function dbInit() {
+  // Try to restore JWT from localStorage
+  try {
+    var savedJwt  = localStorage.getItem('marc_jwt');
+    var savedFund = localStorage.getItem('marc_active_fund');
+    var savedCache = localStorage.getItem('marc_nav_cache');
+
+    // Restore local cache immediately so UI can render
+    if (savedCache) {
+      var c = JSON.parse(savedCache);
+      _marcDB.cache.trades   = c.trades  || [];
+      _marcDB.cache.prices   = c.prices  || {};
+      _marcDB.cache.lastFetched = c.lastFetched || null;
+    }
+    if (savedFund) _marcDB.activeFund = JSON.parse(savedFund);
+
+    if (savedJwt) {
+      try {
+        await dbVerifyToken(savedJwt);
+        // Token valid — load fresh data from DB
+        await dbLoadFunds();
+        if (_marcDB.activeFund) {
+          await dbLoadTrades(_marcDB.activeFund.id);
+          await dbLoadPrices();
+          await dbLoadMessages(_marcDB.activeFund.id);
+        }
+        return true; // authenticated
+      } catch(e) {
+        // Token expired — clear it
+        localStorage.removeItem('marc_jwt');
+        _marcDB.jwt = null;
+      }
+    }
+  } catch(e) { console.warn('dbInit error:', e); }
+  return false; // not authenticated
+}
 
 // ── Position engine ────────────────────────────────────────────────────────
 function computePositions(trades) {
@@ -593,6 +871,10 @@ async function navFetchPrices() {
     }
   } catch(e) { console.error('Price fetch error:', e.message); }
 
+  // Save prices to DB so all devices see same prices
+  if (result && result.prices && Object.keys(result.prices).length) {
+    await dbSavePrices(result.prices);
+  }
   if (btn) { btn.textContent = '\u21bb Refresh Prices'; btn.disabled = false; }
   renderNavDashboard();
 }
@@ -626,7 +908,7 @@ function navOpenTradeModal(asset, direction) {
 function navCloseTradeModal() {
   var m=document.getElementById('nav-trade-modal'); if(m) m.style.display='none';
 }
-function navSaveTrade() {
+async function navSaveTrade() {
   var asset = document.getElementById('nav-trade-asset').value;
   var dir   = document.getElementById('nav-trade-dir').value;
   var date  = document.getElementById('nav-trade-date').value;
@@ -634,19 +916,45 @@ function navSaveTrade() {
   var price = parseFloat(document.getElementById('nav-trade-price').value);
   var notes = document.getElementById('nav-trade-notes').value.trim();
   if (!asset||!date||!qty||qty<=0||!price||price<=0) { alert('Fill in all fields.'); return; }
-  var data = navLoad();
-  data.trades.push({id:Date.now().toString(),asset,direction:dir,date,qty,price,notes,ts:Date.now()});
-  navSave(data);
-  navCloseTradeModal();
+
+  var btn = document.querySelector('#nav-trade-modal button[onclick="navSaveTrade()"]');
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+
+  try {
+    var trade = {
+      id: Date.now().toString(), asset, direction:dir,
+      date, qty, price, notes, ts: Date.now()
+    };
+    // Save to DB (also updates local cache)
+    var saved = await dbSaveTrade(trade);
+    navCloseTradeModal();
+    // Auto-save NAV snapshot after trade
+    var data = navLoad();
+    var positions = computePositions(data.trades);
+    var prices = data.prices || {};
+    var totalValue = 0, totalCost = 0;
+    Object.keys(positions).forEach(function(a) {
+      var p = positions[a];
+      var cp = prices[a] ? prices[a].price : p.costBasis;
+      totalValue += p.qty * cp; totalCost += p.qty * p.costBasis;
+    });
+    var regimePill = document.getElementById('nav-regime-pill');
+    var regime = regimePill ? regimePill.textContent.trim() : '';
+    dbSaveSnapshot(totalValue, totalCost, totalValue-totalCost, regime);
+
+    renderNavDashboard();
+    renderNavAgentContext();
+  } catch(e) {
+    alert('Failed to save trade: ' + e.message);
+    console.error('Trade save error:', e);
+  }
+  if (btn) { btn.textContent = 'Save'; btn.disabled = false; }
+}
+async function navDeleteTrade(id) {
+  if (!confirm('Delete this trade?')) return;
+  await dbDeleteTrade(id);
   renderNavDashboard();
   renderNavAgentContext();
-}
-function navDeleteTrade(id) {
-  if (!confirm('Delete this trade?')) return;
-  var data = navLoad();
-  data.trades = data.trades.filter(function(t){return t.id!==id;});
-  navSave(data);
-  renderNavDashboard();
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1138,7 +1446,9 @@ async function navChatDispatch(userMsg, silent) {
   // Add user message to UI
   if (!silent) navChatAddMessage('user', userMsg);
 
-  // Add to history
+  // Save user message to DB
+  dbSaveMessage('user', userMsg);
+  // Add to history with full context
   navChatHistory.push({role:'user', content: buildAgentPrompt(userMsg)});
 
   // Show thinking bubble
@@ -1166,6 +1476,9 @@ async function navChatDispatch(userMsg, silent) {
 
     // Update thinking bubble with real response
     navChatUpdateMessage(thinkingId, reply);
+
+    // Save messages to DB for persistence across sessions
+    dbSaveMessage('assistant', reply);
 
     // Add assistant response to history (without the context prefix, just the reply)
     navChatHistory.push({role: 'assistant', content: reply});
@@ -1218,8 +1531,9 @@ function buildAgentPrompt(userMsg) {
   return snapshot + userMsg;
 }
 
-function navAgentClearChat() {
+async function navAgentClearChat() {
   navChatHistory = [];
+  await dbClearMessages();
   var thread = document.getElementById('nav-chat-thread');
   if (!thread) return;
   thread.innerHTML = '<div id="nav-chat-empty" style="text-align:center;padding:30px 10px;color:var(--subtle);font-size:11px;font-family:var(--mono);">Ask anything about your portfolio<br><span style="font-size:9px;opacity:.6;">or click ⚡ Auto for a proactive analysis</span></div>';
@@ -1227,3 +1541,136 @@ function navAgentClearChat() {
 
 // Legacy: keep navRunAgent working for backward compat
 function navRunAgent() { navAgentProactive(); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOGIN + FUND MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function doLogin() {
+  var email = document.getElementById('login-email').value.trim();
+  var pass  = document.getElementById('login-password').value;
+  var btn   = document.getElementById('login-btn');
+  var errEl = document.getElementById('login-err');
+  if (!email || !pass) { showLoginErr('Please enter email and password.'); return; }
+
+  btn.textContent = 'Signing in…'; btn.disabled = true;
+  errEl.style.display = 'none';
+
+  try {
+    await dbLogin(email, pass);
+    await onLoginSuccess();
+  } catch(e) {
+    showLoginErr(e.message || 'Login failed. Check credentials.');
+    btn.textContent = 'Sign In'; btn.disabled = false;
+  }
+}
+
+function showLoginErr(msg) {
+  var el = document.getElementById('login-err');
+  if (el) { el.textContent = msg; el.style.display = 'block'; }
+}
+
+async function onLoginSuccess() {
+  // Hide login overlay
+  var overlay = document.getElementById('marc-login');
+  if (overlay) overlay.style.display = 'none';
+
+  // Load funds from DB
+  try {
+    var funds = await dbLoadFunds();
+
+    // If no funds exist yet, create the two default ones
+    if (!funds.length) {
+      await dbCreateFund('Live Fund', 'live', '#00D68F');
+      await dbCreateFund('Experimental', 'experimental', '#FFB020');
+      funds = _marcDB.funds;
+    }
+
+    // Render fund tabs
+    renderFundTabs();
+
+    // Activate first fund (or previously active one)
+    var toActivate = null;
+    var savedFund = null;
+    try { savedFund = JSON.parse(localStorage.getItem('marc_active_fund') || 'null'); } catch(e) {}
+    if (savedFund) toActivate = funds.find(function(f){return f.id===savedFund.id;});
+    if (!toActivate) toActivate = funds[0];
+
+    await activateFund(toActivate);
+
+    // Run backtest on load if not already done
+    if (typeof runBacktest === 'function') {
+      setTimeout(function(){ runBacktest(); }, 300);
+    }
+  } catch(e) {
+    console.error('Post-login setup error:', e);
+    showLoginErr('Login succeeded but failed to load data: ' + e.message);
+  }
+}
+
+function renderFundTabs() {
+  var container = document.getElementById('fund-tabs');
+  if (!container) return;
+  container.innerHTML = _marcDB.funds.map(function(fund) {
+    var isActive = _marcDB.activeFund && _marcDB.activeFund.id === fund.id;
+    var cls = isActive
+      ? (fund.type === 'live' ? 'active-live' : 'active-experimental')
+      : 'inactive';
+    return '<button class="fund-tab ' + cls + '" onclick="activateFund(' + JSON.stringify(JSON.stringify(fund)).slice(1,-1) + ')" '
+      + 'style="' + (isActive ? 'border-color:' + fund.color + ';color:' + fund.color + ';background:' + fund.color + '22;' : '') + '">'
+      + (fund.type === 'live' ? '◆' : '◈') + ' ' + fund.name
+      + '</button>';
+  }).join('');
+}
+
+async function activateFund(fund) {
+  // fund might be a string (from onclick) or object
+  if (typeof fund === 'string') { try { fund = JSON.parse(fund); } catch(e) { return; } }
+  await dbSetActiveFund(fund);
+  renderFundTabs();
+
+  // Show/hide experimental banner
+  var banner = document.getElementById('exp-banner');
+  if (banner) banner.classList.toggle('visible', fund.type === 'experimental');
+
+  // Reload chat history for this fund
+  navChatHistory = _marcDB.cache.messages.map(function(m) {
+    return {role: m.role, content: m.content};
+  });
+
+  // Refresh UI
+  renderNavRegimePanel();
+  renderNavDashboard();
+  renderNavAgentContext();
+
+  // Update fund label in NAV topbar
+  var label = document.querySelector('.nav-kpi-cell .ts-l');
+  if (label && label.textContent === 'Portfolio NAV') {
+    // Find parent and update context label
+  }
+}
+
+// ── Boot sequence ────────────────────────────────────────────────
+// Runs on DOMContentLoaded — tries to restore session
+document.addEventListener('DOMContentLoaded', async function() {
+  try {
+    var authenticated = await dbInit();
+    if (authenticated) {
+      await onLoginSuccess();
+    } else {
+      // Show login overlay — it's visible by default via CSS
+      // (marc-login has display:flex)
+      // Pre-fill email if saved
+      try {
+        var savedEmail = localStorage.getItem('marc_email');
+        if (savedEmail) {
+          var emailField = document.getElementById('login-email');
+          if (emailField) emailField.value = savedEmail;
+        }
+      } catch(e) {}
+    }
+  } catch(e) {
+    console.warn('Boot error:', e);
+    // Show login anyway
+  }
+});
