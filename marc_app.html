@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MARC — Strategy Lab v11</title>
+<title>MARC — Strategy Lab v14</title>
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <style>
@@ -290,6 +290,56 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
   font-size:9px;color:var(--green);text-transform:uppercase;
   letter-spacing:1px;font-family:var(--mono);margin-bottom:5px;
 }
+
+/* ── NAV SECTION ── */
+#nav-section {
+  position:fixed;inset:0;top:48px;z-index:200;
+  display:none;flex-direction:column;background:var(--bg);
+}
+#nav-section.open { display:flex; }
+.nav-col-left {
+  width:260px;flex-shrink:0;background:var(--surface);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;overflow-y:auto;
+}
+.nav-col-center {
+  flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;
+}
+.nav-col-right {
+  width:300px;flex-shrink:0;background:var(--surface);
+  border-left:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.nav-panel-title {
+  font-size:9px;color:var(--subtle);letter-spacing:1px;
+  text-transform:uppercase;font-family:var(--mono);
+  padding:8px 12px;border-bottom:1px solid var(--border);
+  background:var(--surface2);flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.nav-rc-input {
+  font-family:var(--mono);font-size:11px;background:var(--surface2);
+  border:1px solid var(--border);color:var(--text);
+  padding:4px 7px;border-radius:2px;width:100%;
+}
+.nav-rc-input:focus { outline:none;border-color:var(--amber); }
+@keyframes navPulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+#nav-agent-output { font-size:11px;line-height:1.75;color:var(--text);font-family:var(--sans); }
+#nav-agent-output h2 {
+  font-size:11px;font-weight:700;color:var(--green);letter-spacing:1px;
+  text-transform:uppercase;margin:12px 0 5px;padding-bottom:3px;
+  border-bottom:1px solid var(--border);font-family:var(--mono);
+}
+#nav-agent-output h2:first-child { margin-top:0; }
+#nav-agent-output p { margin-bottom:7px; }
+#nav-agent-output strong { color:var(--text-hi,#eef0f6);font-weight:600; }
+#nav-agent-output ul,#nav-agent-output ol { margin:3px 0 7px 14px; }
+#nav-agent-output li { margin-bottom:2px; }
+#nav-agent-output table { width:100%;border-collapse:collapse;margin:6px 0;font-size:10px;font-family:var(--mono); }
+#nav-agent-output th { padding:3px 7px;background:var(--surface2);color:var(--subtle);font-size:9px;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--border);font-weight:400; }
+#nav-agent-output td { padding:3px 7px;border-bottom:1px solid var(--border);color:var(--text); }
+#nav-agent-output code { font-family:var(--mono);font-size:10px;background:var(--surface2);padding:1px 4px;border-radius:2px;color:var(--green); }
+
 </style>
 </head>
 <body>
@@ -298,7 +348,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 <!-- ══ TOPBAR ══ -->
 <div id="topbar">
   <div class="logo">MARC</div>
-  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v11</span>
+  <span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;margin-left:-6px;margin-right:4px;">v14</span>
   <div class="ts"><div class="ts-l">Total Return</div><div class="ts-v g" id="ts-total">—</div></div>
   <div class="ts"><div class="ts-l">CAGR</div><div class="ts-v g" id="ts-cagr">—</div></div>
   <div class="ts"><div class="ts-l">Sharpe</div><div class="ts-v b" id="ts-sharpe">—</div></div>
@@ -307,6 +357,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
   <div class="ts"><div class="ts-l">Churn/Qtr</div><div class="ts-v a" id="ts-churn">—</div></div>
   <span id="ts-regime" class="rpill rpill-E">—</span>
   <div class="top-right">
+    <button class="ibtn" onclick="showNavSection()" style="border-color:var(--green);color:var(--green);">◈ NAV</button>
     <button class="ibtn" id="lpanel-btn" onclick="togglePanel('left')">◧ Controls</button>
     <button class="ibtn" id="rpanel-btn" onclick="togglePanel('right')">◨ Deep Dive</button>
   </div>
@@ -413,8 +464,6 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
     <div class="tab-btn" onclick="showTab('attribution')">Attribution</div>
     <div class="tab-btn" onclick="showTab('map')">Regime Map</div>
     <div class="tab-btn" onclick="showTab('sensitivity')">Sensitivity</div>
-    <div class="tab-btn" onclick="showTab('portfolio')" style="color:var(--green);">⬡ Portfolio</div>
-    <div class="tab-btn" onclick="showTab('regime-calc')" style="color:var(--amber);">⌖ Regime Calc</div>
   </div>
 
   <!-- ── MAIN TAB ── -->
@@ -549,127 +598,6 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
     <div id="chart-sensitivity" style="height:420px;"></div>
   </div>
 
-  <!-- ── PORTFOLIO TAB ── -->
-  <div class="tab-pane" id="tab-portfolio">
-    <div id="port-regime-bar" style="display:flex;align-items:center;gap:12px;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);flex-wrap:wrap;flex-shrink:0;">
-      <span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">Current Regime</span>
-      <span id="port-regime-pill" class="rpill rpill-E">—</span>
-      <span id="port-regime-coord" style="font-family:var(--mono);font-size:10px;color:var(--muted);">(—, —)</span>
-      <span style="font-size:9px;color:var(--subtle);">· model portfolio at current α / N / β</span>
-      <div style="margin-left:auto;display:flex;gap:6px;">
-        <button onclick="openAgentPanel()" id="agent-btn" style="font-size:9px;font-family:var(--mono);background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:3px 9px;border-radius:2px;cursor:pointer;font-weight:700;">⬡ Run Agent</button>
-        <button onclick="exportPortfolioJSON()" style="font-size:9px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 9px;border-radius:2px;cursor:pointer;">↓ Export JSON</button>
-        <button onclick="copyPortfolioCSV()" id="csv-btn" style="font-size:9px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 9px;border-radius:2px;cursor:pointer;">⎘ Copy CSV</button>
-      </div>
-    </div>
-    <div style="display:flex;height:calc(100% - 42px);min-height:0;overflow:hidden;">
-      <div style="flex:1;min-width:0;overflow-y:auto;">
-        <table style="width:100%;border-collapse:collapse;font-size:11px;">
-          <thead>
-            <tr style="background:var(--surface2);">
-              <th style="padding:7px 12px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">#</th>
-              <th style="padding:7px 12px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Asset</th>
-              <th style="padding:7px 12px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Type</th>
-              <th style="padding:7px 12px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Dist</th>
-              <th style="padding:7px 12px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Score</th>
-              <th style="padding:7px 12px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);min-width:120px;">Weight</th>
-            </tr>
-          </thead>
-          <tbody id="port-holdings-body"></tbody>
-        </table>
-      </div>
-      <div style="width:240px;flex-shrink:0;border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;">
-        <div style="padding:10px 12px;border-bottom:1px solid var(--border);">
-          <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:6px;">Allocation</div>
-          <div id="port-donut" style="height:160px;"></div>
-        </div>
-        <div style="padding:10px 12px;border-bottom:1px solid var(--border);">
-          <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">By Sector</div>
-          <div id="port-sector-bars"></div>
-        </div>
-        <div style="padding:10px 12px;">
-          <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">Summary</div>
-          <div id="port-stats-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:5px;"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-
-  <!-- ── REGIME CALCULATOR TAB ── -->
-  <div class="tab-pane" id="tab-regime-calc">
-    <div style="padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-      <span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">Macro Regime Calculator</span>
-      <span style="font-size:9px;color:var(--subtle);">· mirrors the Excel model exactly · enter indicators to compute X/Y scores and regime</span>
-      <button onclick="computeRegimeCalc()" style="margin-left:auto;font-size:10px;background:var(--amber-dim);border:1px solid var(--amber);color:var(--amber);padding:4px 12px;border-radius:2px;cursor:pointer;font-family:var(--sans);font-weight:700;">↻ Compute</button>
-    </div>
-    <div style="display:flex;height:calc(100% - 42px);overflow:hidden;">
-      <!-- Inputs -->
-      <div style="width:300px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:auto;padding:14px;">
-        <div style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:12px;padding-bottom:4px;border-bottom:1px solid var(--border);">Growth Indicators (→ X Score)</div>
-        <div style="margin-bottom:10px;">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">GDP QoQ% <span style="color:var(--subtle);font-size:9px;">e.g. 0.007 = 0.7%</span></div>
-          <input type="number" id="rc-gdp" step="0.0001" placeholder="0.007" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
-          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(GDP×100−1)×3))</div>
-        </div>
-        <div style="margin-bottom:10px;">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">ISM PMI <span style="color:var(--subtle);font-size:9px;">manufacturing index</span></div>
-          <input type="number" id="rc-pmi" step="0.1" placeholder="52.4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
-          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(PMI−50)×0.65))</div>
-        </div>
-        <div style="margin-bottom:10px;">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">Unemployment % <span style="color:var(--subtle);font-size:9px;">e.g. 4.1</span></div>
-          <input type="number" id="rc-unemp" step="0.1" placeholder="4.1" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
-          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(U−4.5)×2.8×−1))</div>
-        </div>
-        <div style="margin-bottom:16px;">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">US Retail Sales MoM% <span style="color:var(--subtle);font-size:9px;">e.g. 0.3</span></div>
-          <input type="number" id="rc-retail" step="0.1" placeholder="0.3" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
-          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(R−0.3)×2))</div>
-        </div>
-        <div style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:12px;padding-bottom:4px;border-bottom:1px solid var(--border);">Inflation Indicators (→ Y Score)</div>
-        <div style="margin-bottom:10px;">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">CPI YoY% <span style="color:var(--subtle);font-size:9px;">e.g. 2.4</span></div>
-          <input type="number" id="rc-cpi" step="0.01" placeholder="2.4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
-          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(CPI−2.5)×2))</div>
-        </div>
-        <div style="margin-bottom:16px;">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;">PCE YoY% <span style="color:var(--subtle);font-size:9px;">e.g. 2.4</span></div>
-          <input type="number" id="rc-pce" step="0.01" placeholder="2.4" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;"/>
-          <div style="font-size:9px;color:var(--subtle);margin-top:2px;">Formula: MAX(-7,MIN(7,(PCE−2)×2))</div>
-        </div>
-        <button onclick="computeRegimeCalc()" style="width:100%;padding:9px;background:var(--amber);color:#000;border:none;border-radius:3px;font-family:var(--sans);font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.5px;">↻ Compute Regime</button>
-        <div style="margin-top:8px;font-size:9px;color:var(--subtle);text-align:center;">X Score = (GDP×2 + PMI×3 + Unemp×2 + Retail×1) / 8<br>Y Score = (CPI×3 + PCE×2) / 5</div>
-      </div>
-      <!-- Results -->
-      <div style="flex:1;overflow-y:auto;padding:14px;">
-        <div id="rc-result" style="display:none;">
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
-            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;">
-              <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">X Score (Growth)</div>
-              <div id="rc-x" style="font-family:var(--mono);font-size:24px;font-weight:500;">—</div>
-            </div>
-            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;">
-              <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Y Score (Inflation)</div>
-              <div id="rc-y" style="font-family:var(--mono);font-size:24px;font-weight:500;">—</div>
-            </div>
-            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;">
-              <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Regime</div>
-              <div id="rc-quadrant" style="font-size:18px;font-weight:700;">—</div>
-            </div>
-          </div>
-          <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">Indicator Breakdown</div>
-          <div id="rc-breakdown" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px;font-family:var(--mono);font-size:10px;line-height:1.8;"></div>
-          <div style="margin-top:12px;">
-            <button onclick="applyRegimeToPortfolio()" style="font-size:10px;background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:6px 14px;border-radius:2px;cursor:pointer;font-family:var(--sans);font-weight:600;">→ Apply to Portfolio Tab</button>
-            <span style="font-size:9px;color:var(--subtle);margin-left:10px;">Uses these coords to show current model portfolio</span>
-          </div>
-        </div>
-        <div id="rc-empty" style="color:var(--subtle);font-size:11px;padding:20px 0;">Enter indicator values and click Compute to see the regime.</div>
-      </div>
-    </div>
-  </div>
-
 </div><!-- /center-panel -->
 
 <!-- RIGHT PANEL -->
@@ -722,6 +650,7 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 </div><!-- /workspace -->
 </div><!-- /shell -->
 
+
 <!-- PORTFOLIO SNAPSHOT MODAL -->
 <div class="snap-modal" id="snap-modal" style="display:none;" onclick="if(event.target===this)closeSnap()">
   <div class="snap-inner">
@@ -735,51 +664,241 @@ select.ctrl-sel{font-family:var(--mono);font-size:10px;background:var(--surface2
 </div>
 
 
-<!-- MARC AGENT PANEL -->
-<div id="agent-panel">
-  <div id="agent-panel-hdr">
-    <div style="width:24px;height:24px;background:var(--green);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;font-weight:700;color:#000;flex-shrink:0;">M</div>
-    <h3>MARC Agent <span style="font-size:10px;color:var(--subtle);font-weight:400;font-family:var(--mono);">portfolio analysis</span></h3>
-    <button id="agent-close" onclick="closeAgentPanel()">✕</button>
+<!-- PORTFOLIO SNAPSHOT MODAL -->
+<div class="snap-modal" id="snap-modal" style="display:none;" onclick="if(event.target===this)closeSnap()">
+  <div class="snap-inner">
+    <div class="snap-hdr">
+      <h3 id="snap-title">Portfolio Snapshot</h3>
+      <button class="snap-close" onclick="closeSnap()">✕ Close</button>
+    </div>
+    <div class="snap-kpis" id="snap-kpis"></div>
+    <div id="snap-holdings"></div>
   </div>
-  <div id="agent-body">
-    <!-- Auto-populated snapshot -->
-    <div class="agent-snapshot-label">Full model briefing (auto-populated)</div>
-    <div class="agent-snapshot-box" id="agent-snapshot-box">—</div>
+</div>
 
-    <!-- Connected status -->
-    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--green-dim);border:1px solid var(--green-mid);border-radius:3px;margin-bottom:14px;">
-      <span style="width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0;box-shadow:0 0 6px var(--green);"></span>
-      <span style="font-family:var(--mono);font-size:10px;color:var(--green);font-weight:600;">MARC Agent connected</span>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-left:auto;">claude-sonnet-4-6</span>
+
+<!-- ════ NAV SECTION ════ -->
+<div id="nav-section">
+
+  <!-- NAV topbar -->
+  <div style="display:flex;align-items:center;gap:0;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;height:42px;">
+    <div style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;align-items:center;gap:10px;">
+      <span style="font-family:var(--mono);font-size:11px;font-weight:600;color:var(--green);">◈ MARC NAV</span>
+      <span style="font-size:9px;color:var(--subtle);">forward portfolio layer</span>
     </div>
-
-    <!-- Extra context -->
-    <div class="agent-field">
-      <label>Extra context <span style="color:var(--subtle);font-size:9px;">optional</span></label>
-      <textarea class="short" id="agent-context"
-        placeholder="e.g. I want to reduce crypto. Time horizon 12 months. Can't hold leveraged ETFs."></textarea>
+    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
+      <div class="ts-l">NAV</div><div class="ts-v b" id="nav-kpi-nav">—</div>
     </div>
-
-    <!-- Your actual holdings -->
-    <div class="agent-field">
-      <label>Your actual holdings <span style="color:var(--subtle);font-size:9px;">optional — vs model above</span></label>
-      <textarea id="agent-holdings"
-        placeholder="BTC: 15%&#10;ETH: 10%&#10;SPY: 25%&#10;GLD: 8%&#10;Cash: 30%&#10;&#10;Leave blank to analyse model portfolio only."></textarea>
+    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
+      <div class="ts-l">P&amp;L</div><div class="ts-v" id="nav-kpi-pnl">—</div>
     </div>
+    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
+      <div class="ts-l">Return</div><div class="ts-v" id="nav-kpi-ret">—</div>
+    </div>
+    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
+      <div class="ts-l">vs Model</div><div class="ts-v a" id="nav-kpi-drift">—</div>
+    </div>
+    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
+      <div class="ts-l">Positions</div><div class="ts-v b" id="nav-kpi-pos">—</div>
+    </div>
+    <div class="ts" style="padding:0 14px;border-right:1px solid var(--border);height:100%;display:flex;flex-direction:column;justify-content:center;">
+      <div class="ts-l">Updated</div><div class="ts-v" id="nav-kpi-updated" style="font-size:10px;">—</div>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:6px;padding:0 12px;">
+      <button id="nav-price-btn" onclick="navFetchPrices()" style="font-size:10px;font-family:var(--mono);background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);padding:3px 9px;border-radius:2px;cursor:pointer;font-weight:700;">↻ Prices</button>
+      <button onclick="navOpenTradeModal()" style="font-size:10px;font-family:var(--mono);background:var(--green-dim);border:1px solid var(--green);color:var(--green);padding:3px 9px;border-radius:2px;cursor:pointer;font-weight:700;">+ Trade</button>
+      <button onclick="navExport()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 9px;border-radius:2px;cursor:pointer;">↓ Export</button>
+      <button onclick="navClear()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--red);padding:3px 9px;border-radius:2px;cursor:pointer;">✕ Clear</button>
+      <button onclick="showNavSection()" style="font-size:10px;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:3px 9px;border-radius:2px;cursor:pointer;">← Back</button>
+    </div>
+  </div>
 
-    <button id="agent-run-btn" onclick="runMarcAgent()">▶ Run Analysis</button>
+  <!-- Three columns -->
+  <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
 
-    <div id="agent-output-wrap">
-      <div id="agent-output-hdr">
-        <span id="agent-output-lbl">Agent analysis</span>
-        <span id="agent-ts"></span>
+    <!-- LEFT: Regime + Model Portfolio -->
+    <div class="nav-col-left">
+      <!-- Current regime pill -->
+      <div style="padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:6px;">Current Regime</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+          <span id="nav-regime-pill" class="rpill rpill-E">—</span>
+          <span id="nav-regime-coord" style="font-family:var(--mono);font-size:10px;color:var(--muted);">(—, —)</span>
+        </div>
+        <div id="nav-regime-source" style="font-size:9px;color:var(--subtle);font-family:var(--mono);">—</div>
       </div>
-      <div id="agent-output"></div>
+
+      <!-- Regime Calculator -->
+      <div style="padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">⌖ Regime Calculator</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:6px;">
+          <div>
+            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">GDP QoQ%</div>
+            <input type="number" id="nav-rc-gdp" class="nav-rc-input" placeholder="0.007" step="0.0001"/>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">ISM PMI</div>
+            <input type="number" id="nav-rc-pmi" class="nav-rc-input" placeholder="52.4" step="0.1"/>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">Unemployment%</div>
+            <input type="number" id="nav-rc-unemp" class="nav-rc-input" placeholder="4.1" step="0.1"/>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">Retail MoM%</div>
+            <input type="number" id="nav-rc-retail" class="nav-rc-input" placeholder="0.3" step="0.1"/>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">CPI YoY%</div>
+            <input type="number" id="nav-rc-cpi" class="nav-rc-input" placeholder="2.4" step="0.01"/>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:2px;">PCE YoY%</div>
+            <input type="number" id="nav-rc-pce" class="nav-rc-input" placeholder="2.4" step="0.01"/>
+          </div>
+        </div>
+        <button onclick="navComputeRegime()" style="width:100%;padding:6px;background:var(--amber);color:#000;border:none;border-radius:3px;font-size:11px;font-weight:700;cursor:pointer;font-family:var(--sans);">↻ Compute</button>
+        <div id="nav-rc-result"></div>
+      </div>
+
+      <!-- Model portfolio -->
+      <div style="padding:10px 12px;flex:1;overflow-y:auto;">
+        <div style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);margin-bottom:8px;">Model Portfolio</div>
+        <div id="nav-model-list"></div>
+      </div>
+    </div>
+
+    <!-- CENTER: Dashboard -->
+    <div class="nav-col-center">
+
+      <!-- Charts row -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div style="border-right:1px solid var(--border);padding:8px 10px;">
+          <div class="nav-panel-title" style="padding:0 0 5px;border:none;background:none;">Actual allocation</div>
+          <div id="nav-chart-alloc" style="height:150px;"></div>
+        </div>
+        <div style="border-right:1px solid var(--border);padding:8px 10px;">
+          <div class="nav-panel-title" style="padding:0 0 5px;border:none;background:none;">Actual vs model</div>
+          <div id="nav-chart-compare" style="height:150px;"></div>
+        </div>
+        <div style="padding:8px 10px;">
+          <div class="nav-panel-title" style="padding:0 0 5px;border:none;background:none;">P&amp;L by position</div>
+          <div id="nav-chart-pnl" style="height:150px;"></div>
+        </div>
+      </div>
+
+      <!-- Holdings table -->
+      <div style="flex:1;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="background:var(--surface2);">
+              <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Asset</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Qty</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Cost</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Live</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">24h</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Value</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">P&amp;L</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Actual%</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Model%</th>
+              <th style="padding:6px 10px;text-align:right;font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);font-family:var(--mono);font-weight:400;position:sticky;top:0;background:var(--surface2);">Delta</th>
+              <th style="padding:6px 10px;position:sticky;top:0;background:var(--surface2);border-bottom:1px solid var(--border);"></th>
+            </tr>
+          </thead>
+          <tbody id="nav-holdings-tbody"></tbody>
+        </table>
+      </div>
+
+      <!-- Trade log strip at bottom -->
+      <div style="height:160px;border-top:1px solid var(--border);flex-shrink:0;overflow-y:auto;" id="nav-trade-log"></div>
+    </div>
+
+    <!-- RIGHT: CIO Agent (persistent) -->
+    <div class="nav-col-right">
+      <div class="nav-panel-title">
+        <span>⬡ CIO Agent</span>
+        <span style="display:flex;align-items:center;gap:5px;">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--green);"></span>
+          <span style="font-size:9px;color:var(--green);">connected</span>
+        </span>
+      </div>
+
+      <!-- Snapshot context box -->
+      <div style="padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:5px;">Portfolio context (auto)</div>
+        <div id="nav-agent-context-box" style="background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:6px 8px;font-family:var(--mono);font-size:9px;color:var(--muted);max-height:90px;overflow-y:auto;white-space:pre;line-height:1.5;">—</div>
+      </div>
+
+      <!-- Extra context input -->
+      <div style="padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <div style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-bottom:5px;">Extra context</div>
+        <textarea id="nav-agent-extra" placeholder="e.g. I want to reduce crypto. 12 month horizon." style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:3px;color:var(--text);font-family:var(--mono);font-size:10px;padding:6px 8px;resize:none;height:52px;outline:none;line-height:1.5;"></textarea>
+      </div>
+
+      <!-- Run button -->
+      <div style="padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0;">
+        <button id="nav-agent-run-btn" onclick="navRunAgent()" style="width:100%;padding:8px;background:var(--green);color:#000;border:none;border-radius:3px;font-family:var(--sans);font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.3px;">▶ Run Analysis</button>
+        <div id="nav-agent-ts" style="font-size:9px;color:var(--subtle);font-family:var(--mono);margin-top:4px;text-align:right;"></div>
+      </div>
+
+      <!-- Agent output (scrollable, takes remaining space) -->
+      <div style="flex:1;overflow-y:auto;padding:10px 12px;">
+        <div id="nav-agent-output" style="display:none;"></div>
+      </div>
     </div>
   </div>
 </div>
-<script src="marc_data.js?v=11"></script>
-<script src="marc_app.js?v=11"></script>
+
+<!-- NAV: Trade Modal -->
+<div id="nav-trade-modal" style="display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.75);align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border2);border-radius:6px;width:400px;box-shadow:0 20px 80px rgba(0,0,0,.7);">
+    <div style="padding:13px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+      <h3 style="font-size:13px;font-weight:700;" id="nav-trade-title">Add Trade</h3>
+      <button onclick="navCloseTradeModal()" style="background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;padding:3px 9px;border-radius:2px;font-size:11px;">✕</button>
+    </div>
+    <div style="padding:14px 18px;display:flex;flex-direction:column;gap:10px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Direction</div>
+          <select id="nav-trade-dir" class="ctrl-sel" style="width:100%;padding:5px 7px;font-size:12px;">
+            <option value="buy">Buy</option><option value="sell">Sell</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Date</div>
+          <input type="date" id="nav-trade-date" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:2px;"/>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Asset</div>
+        <select id="nav-trade-asset" class="ctrl-sel" style="width:100%;padding:5px 7px;font-size:12px;"></select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Quantity</div>
+          <input type="number" id="nav-trade-qty" placeholder="0.00" step="any" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:2px;"/>
+        </div>
+        <div>
+          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Price ($)</div>
+          <input type="number" id="nav-trade-price" placeholder="0.00" step="any" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:2px;"/>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Notes</div>
+        <input type="text" id="nav-trade-notes" placeholder="e.g. Regime rebalance" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:2px;"/>
+      </div>
+      <div id="nav-trade-preview" style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:7px 10px;font-family:var(--mono);font-size:11px;color:var(--muted);">Total: —</div>
+    </div>
+    <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="navCloseTradeModal()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:3px;cursor:pointer;font-size:11px;">Cancel</button>
+      <button onclick="navSaveTrade()" style="background:var(--green);color:#000;border:none;padding:6px 18px;border-radius:3px;cursor:pointer;font-size:12px;font-weight:700;">Save</button>
+    </div>
+  </div>
+</div>
+
+
+<script src="marc_data.js?v=14"></script>
+<script src="marc_app.js?v=14"></script>
+<script src="marc_nav.js?v=14"></script>
 </body>
 </html>
