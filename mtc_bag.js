@@ -1307,12 +1307,16 @@ function renderNavCharts(positions, prices, modelW, totalValue) {
 function renderAllAssetTable(positions, prices, modelWeights, totalValue) {
   const tbody = document.getElementById('nav-holdings-tbody');
   if (!tbody) return;
+
+  // BAG Fund only trades Bitcoin and PAX Gold
+  const BAG_ASSETS = ['Bitcoin', 'PAX Gold'];
   const TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00C97A'};
 
-  const rows = window.RAW.assets.map(ao => {
-    const p  = positions[ao.asset];
-    const pd = prices[ao.asset];
-    const mh = modelWeights[ao.asset];
+  const rows = BAG_ASSETS.map(assetName => {
+    const ao = window.RAW.assets.find(a => a.asset === assetName);
+    const p  = positions[assetName];
+    const pd = prices[assetName];
+    const mh = modelWeights[assetName];
     const cp = pd ? pd.price : (p ? p.costBasis : null);
     const c24 = pd ? pd.change24h : null;
     const value = p && cp ? p.qty * cp : 0;
@@ -1324,69 +1328,45 @@ function renderAllAssetTable(positions, prices, modelWeights, totalValue) {
     const delta     = actualPct - mw;
     const hasPos    = p && p.qty > 0.000001;
     const hasLive   = !!pd;
-    const cls       = hasPos ? 'in-portfolio' : (mw > 0 ? 'model-only' : 'watch-only');
-    return {asset:ao.asset, ao, p, cp, c24, value, cost, pnl, pnlPct, actualPct, mw, delta, hasPos, hasLive, type:ao.type, cls};
-  });
+    const type      = ao ? ao.type : 'Crypto';
+    const tc        = TC[type] || '#888';
+    const dc        = Math.abs(delta)<0.02?'var(--green)':Math.abs(delta)<0.05?'var(--amber)':'var(--red)';
+    const pc        = pnl>=0?'var(--green)':'var(--red)';
+    const cc        = c24!=null?(c24>=0?'var(--green)':'var(--red)'):'var(--subtle)';
 
-  rows.sort((a, b) => {
-    const ord = {'in-portfolio':0,'model-only':1,'watch-only':2};
-    if (ord[a.cls] !== ord[b.cls]) return ord[a.cls] - ord[b.cls];
-    if (a.cls === 'in-portfolio') return b.value - a.value;
-    if (a.cls === 'model-only')   return b.mw - a.mw;
-    return a.asset.localeCompare(b.asset);
-  });
-
-  const sectionHdr = (label, count, color) =>
-    `<tr class="nav-section-row"><td colspan="11" style="color:${color};letter-spacing:1.5px;">${label} <span style="opacity:.5;font-size:8px;">${count} assets</span></td></tr>`;
-
-  const buildRow = r => {
-    const dc  = Math.abs(r.delta)<0.02?'var(--green)':Math.abs(r.delta)<0.05?'var(--amber)':'var(--red)';
-    const pc  = r.pnl>=0?'var(--green)':'var(--red)';
-    const cc  = r.c24!=null?(r.c24>=0?'var(--green)':'var(--red)'):'var(--subtle)';
-    const tc  = TC[r.type]||'#888';
-    const trC = r.cls;
-    return `<tr class="${trC}" style="border-bottom:1px solid var(--border);"
-      onmouseover="this.style.background='var(--surface2)';this.style.opacity='1';"
-      onmouseout="this.style.background='';this.style.opacity='';">
-      <td style="padding:5px 10px;">
-        <span style="font-weight:${r.hasPos?700:500};font-size:11px;">${r.asset}</span>
-        <span class="badge badge-${r.type}" style="margin-left:5px;font-size:8px;">${r.type.slice(0,3)}</span>
+    return `<tr style="border-bottom:1px solid var(--border);"
+      onmouseover="this.style.background='var(--surface2)'"
+      onmouseout="this.style.background=''">
+      <td style="padding:8px 10px;">
+        <span style="font-weight:700;font-size:12px;">${assetName}</span>
+        <span class="badge badge-${type}" style="margin-left:5px;font-size:8px;">${type.slice(0,3)}</span>
       </td>
-      <td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">${r.hasPos?navFmtQty(r.p.qty):'—'}</td>
-      <td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">${r.hasPos?'$'+r.p.costBasis.toFixed(2):'—'}</td>
-      <td style="padding:5px 10px;">
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted);">${hasPos?navFmtQty(p.qty):'—'}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted);">${hasPos?'$'+p.costBasis.toLocaleString('en-AU',{maximumFractionDigits:2}):'—'}</td>
+      <td style="padding:8px 10px;">
         <div class="live-price">
-          <span class="live-dot ${r.hasLive?'live':'stale'}"></span>
-          <span style="font-family:var(--mono);font-size:${r.hasPos?13:11}px;font-weight:${r.hasPos?700:500};color:${r.hasLive?'var(--text)':'var(--muted)'};">${r.cp!=null?navFmt$(r.cp):'—'}</span>
+          <span class="live-dot ${hasLive?'live':'stale'}"></span>
+          <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${hasLive?'var(--text)':'var(--muted)'};">${cp!=null?'$'+cp.toLocaleString('en-AU',{maximumFractionDigits:2}):'—'}</span>
         </div>
       </td>
-      <td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:${cc};">${r.c24!=null?(r.c24>=0?'+':'')+r.c24.toFixed(2)+'%':'—'}</td>
-      <td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;">${r.hasPos?navFmt$(r.value):'—'}</td>
-      <td class="pnl-cell" style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:10px;color:${pc};">
-        ${r.hasPos?(r.pnl>=0?'+':'')+navFmt$(r.pnl)+'<br><span class="pnl-pct">'+(r.pnlPct>=0?'+':'')+(r.pnlPct*100).toFixed(1)+'%</span>':'—'}
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:${cc};">${c24!=null?(c24>=0?'+':'')+c24.toFixed(2)+'%':'—'}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:13px;font-weight:600;">${hasPos?navFmt$(value):'—'}</td>
+      <td class="pnl-cell" style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:${pc};">
+        ${hasPos?(pnl>=0?'+':'')+navFmt$(pnl)+'<br><span class="pnl-pct">'+(pnlPct>=0?'+':'')+(pnlPct*100).toFixed(1)+'%</span>':'—'}
       </td>
-      <td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;">${r.hasPos?(r.actualPct*100).toFixed(1)+'%':'—'}</td>
-      <td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:${tc};">${r.mw>0?(r.mw*100).toFixed(1)+'%':'—'}</td>
-      <td style="padding:5px 10px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;color:${dc};">
-        ${(r.mw>0||r.hasPos)?(r.delta>=0?'+':'')+(r.delta*100).toFixed(1)+'%':'—'}
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:12px;">${hasPos?(actualPct*100).toFixed(1)+'%':'—'}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:12px;color:${tc};">${mw>0?(mw*100).toFixed(1)+'%':'—'}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:12px;font-weight:600;color:${dc};">
+        ${(mw>0||hasPos)?(delta>=0?'+':'')+(delta*100).toFixed(1)+'%':'—'}
       </td>
-      <td style="padding:5px 10px;text-align:center;white-space:nowrap;">
-        <button onclick="navOpenTradeModal('${r.asset}','buy')" style="font-size:9px;background:var(--green-dim);border:1px solid var(--green-mid);color:var(--green);padding:2px 5px;border-radius:2px;cursor:pointer;margin-right:2px;">B</button>
-        ${r.hasPos?`<button onclick="navOpenTradeModal('${r.asset}','sell')" style="font-size:9px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);padding:2px 5px;border-radius:2px;cursor:pointer;">S</button>`:''}
+      <td style="padding:8px 10px;text-align:center;white-space:nowrap;">
+        <button onclick="navOpenTradeModal('${assetName}','buy')" style="font-size:9px;background:var(--green-dim);border:1px solid var(--green-mid);color:var(--green);padding:3px 8px;border-radius:2px;cursor:pointer;margin-right:4px;">Buy</button>
+        ${hasPos?`<button onclick="navOpenTradeModal('${assetName}','sell')" style="font-size:9px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);padding:3px 8px;border-radius:2px;cursor:pointer;">Sell</button>`:''}
       </td>
     </tr>`;
-  };
+  });
 
-  const portfolio = rows.filter(r => r.cls === 'in-portfolio');
-  const model     = rows.filter(r => r.cls === 'model-only');
-  const watch     = rows.filter(r => r.cls === 'watch-only');
-
-  let html = '';
-  if (portfolio.length) { html += sectionHdr('◆ In Portfolio', portfolio.length, 'var(--green)'); html += portfolio.map(buildRow).join(''); }
-  if (model.length)     { html += sectionHdr('◈ Model — not held', model.length, 'var(--blue)'); html += model.map(buildRow).join(''); }
-  if (watch.length)     { html += sectionHdr('○ Watchlist', watch.length, 'var(--subtle)'); html += watch.map(buildRow).join(''); }
-  if (!html) html = '<tr><td colspan="11" style="padding:40px;text-align:center;color:var(--subtle);font-size:11px;font-family:var(--mono);">No trades yet — click + Trade to get started</td></tr>';
-  tbody.innerHTML = html;
+  tbody.innerHTML = rows.join('');
 }
 
 function renderPriceTicker() {
@@ -1394,7 +1374,9 @@ function renderPriceTicker() {
   if (!ticker) return;
   const prices = navLoad().prices || {};
   const TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00C97A'};
-  ticker.innerHTML = (window.RAW?.assets || []).map(a => {
+  // BAG Fund only shows BTC and PAXG
+  const BAG_ASSETS = (window.RAW?.assets || []).filter(a => a.asset === 'Bitcoin' || a.asset === 'PAX Gold');
+  ticker.innerHTML = BAG_ASSETS.map(a => {
     const pd  = prices[a.asset];
     const tc  = TC[a.type] || '#888';
     const price = pd ? pd.price : null;
@@ -1498,8 +1480,10 @@ function navOpenTradeModal(asset, direction) {
   const modal = document.getElementById('nav-trade-modal');
   if (!modal) return;
   const sel = document.getElementById('nav-trade-asset');
-  sel.innerHTML = window.RAW.assets.map(a =>
-    `<option value="${a.asset}"${a.asset===asset?' selected':''}>${a.asset} (${a.type})</option>`
+  // BAG Fund only trades Bitcoin and PAX Gold
+  const BAG_ASSETS = ['Bitcoin', 'PAX Gold'];
+  sel.innerHTML = BAG_ASSETS.map(a =>
+    `<option value="${a}"${a===asset?' selected':''}>${a}</option>`
   ).join('');
   if (direction) document.getElementById('nav-trade-dir').value = direction;
   document.getElementById('nav-trade-date').value  = new Date().toISOString().split('T')[0];
@@ -1769,7 +1753,7 @@ const _origSwitchBagTab = typeof switchBagTab !== 'undefined' ? switchBagTab : n
 function switchBagTab(tab) {
   // Update tab buttons
   document.querySelectorAll('#mode-bag .stab').forEach((t, i) => {
-    const tabs = ['overview','nav','signal','performance','models'];
+    const tabs = ['overview','nav','signal','performance','funddata','models'];
     t.classList.toggle('active', tabs[i] === tab);
   });
   document.querySelectorAll('#mode-bag .subpage').forEach(p => p.classList.remove('active'));
@@ -1781,9 +1765,243 @@ function switchBagTab(tab) {
   if (tab === 'nav')         { renderNavRegimePanel(); renderNavDashboard(); }
   if (tab === 'signal')      renderBagSignal();
   if (tab === 'performance') renderBagPerformance();
+  if (tab === 'funddata')    renderBagFundData();
   if (tab === 'models')      renderModelLibrary();
 
   setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+}
+
+// ═══════════════════════════════════════
+// FUND DATA PAGE
+// Monthly inputs: units, applications, redemptions, NAV
+// ═══════════════════════════════════════
+function renderBagFundData() {
+  const grid = document.getElementById('bag-funddata-grid');
+  if (!grid) return;
+
+  // Load saved fund data from localStorage
+  let fundData = {};
+  try { fundData = JSON.parse(localStorage.getItem('mtc_bag_funddata') || '{}'); } catch(e) {}
+
+  // Current month
+  const now = new Date();
+  const currentMonth = now.toISOString().slice(0,7);
+
+  // Build month list from inception
+  const months = [];
+  let d = new Date('2025-12-01');
+  while (d <= now) {
+    months.push(d.toISOString().slice(0,7));
+    d.setMonth(d.getMonth() + 1);
+  }
+
+  grid.innerHTML = `
+    <!-- Monthly Entry Form -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">Monthly Update</span>
+        <span class="card-meta">applications · redemptions · NAV</span>
+      </div>
+      <div class="card-body">
+
+        <div style="margin-bottom:14px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;">Period</div>
+          <select id="fd-month" class="ctrl-sel" style="width:100%;padding:6px 8px;font-size:12px;" onchange="loadFundDataMonth()">
+            ${months.reverse().map(m => `<option value="${m}" ${m===currentMonth?'selected':''}>${m}</option>`).join('')}
+          </select>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+          <div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;">Units on Issue</div>
+            <input type="number" id="fd-units" placeholder="e.g. 1259886.75" step="any"
+              style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"/>
+          </div>
+          <div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;">NAV per Unit</div>
+            <input type="number" id="fd-navpu" placeholder="e.g. 1.0294" step="any"
+              style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"/>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:14px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--green);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Applications (Capital In)</div>
+          <div id="fd-apps-list"></div>
+          <button onclick="addFundDataEntry('app')"
+            style="width:100%;padding:6px;background:var(--green-dim);border:1px solid var(--green-mid);color:var(--green);border-radius:var(--r-sm);font-size:10px;font-weight:700;cursor:pointer;margin-top:6px;">
+            + Add Application
+          </button>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:14px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--red);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Redemptions (Capital Out)</div>
+          <div id="fd-reds-list"></div>
+          <button onclick="addFundDataEntry('red')"
+            style="width:100%;padding:6px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);border-radius:var(--r-sm);font-size:10px;font-weight:700;cursor:pointer;margin-top:6px;">
+            + Add Redemption
+          </button>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:14px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Fees This Month (AUD)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <div style="font-size:9px;color:var(--subtle);margin-bottom:3px;">Management Fee</div>
+              <input type="number" id="fd-mgmtfee" placeholder="auto-calculated" step="any"
+                style="width:100%;font-family:var(--mono);font-size:11px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"/>
+            </div>
+            <div>
+              <div style="font-size:9px;color:var(--subtle);margin-bottom:3px;">BC Admin Fee</div>
+              <input type="number" id="fd-bcfee" placeholder="3850" step="any"
+                style="width:100%;font-family:var(--mono);font-size:11px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"/>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:8px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;">Notes</div>
+          <textarea id="fd-notes" placeholder="e.g. Monthly rebalance completed. New investor onboarded."
+            style="width:100%;font-family:var(--mono);font-size:11px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:var(--r-sm);resize:none;height:60px;box-sizing:border-box;outline:none;line-height:1.5;"></textarea>
+        </div>
+
+        <button onclick="saveFundDataMonth()"
+          style="width:100%;padding:9px;background:var(--green);color:#000;border:none;border-radius:var(--r-sm);font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.3px;">
+          ✓ Save Month
+        </button>
+        <div id="fd-save-status" style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:6px;text-align:center;min-height:14px;"></div>
+      </div>
+    </div>
+
+    <!-- Fund History Table -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">Fund History</span>
+        <span class="card-meta">all months</span>
+      </div>
+      <div class="card-body-flush" id="fd-history-table">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="background:var(--surface2);">
+              <th style="padding:8px 12px;text-align:left;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">Month</th>
+              <th style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">Units</th>
+              <th style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">NAV/Unit</th>
+              <th style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--green);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">Apps</th>
+              <th style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--red);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">Reds</th>
+              <th style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">Net Flow</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${months.map(m => {
+              const row = fundData[m];
+              if (!row) return `<tr style="border-bottom:1px solid var(--border);opacity:.4;">
+                <td style="padding:7px 12px;font-family:var(--mono);font-size:10px;color:var(--muted);">${m}</td>
+                <td colspan="5" style="padding:7px 12px;font-size:10px;color:var(--subtle);font-style:italic;">No data entered</td>
+              </tr>`;
+              const apps = (row.applications||[]).reduce((s,a) => s + (parseFloat(a.amount)||0), 0);
+              const reds = (row.redemptions||[]).reduce((s,a)  => s + (parseFloat(a.amount)||0), 0);
+              const net  = apps - reds;
+              return `<tr style="border-bottom:1px solid var(--border);" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+                <td style="padding:7px 12px;font-family:var(--mono);font-size:11px;font-weight:600;">${m}</td>
+                <td style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--muted);">${row.units ? parseFloat(row.units).toLocaleString('en-AU',{maximumFractionDigits:2}) : '—'}</td>
+                <td style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:11px;color:${row.navpu>=1?'var(--green)':'var(--red)'};">${row.navpu ? parseFloat(row.navpu).toFixed(4) : '—'}</td>
+                <td style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--green);">${apps > 0 ? '$'+apps.toLocaleString('en-AU',{maximumFractionDigits:0}) : '—'}</td>
+                <td style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--red);">${reds > 0 ? '-$'+reds.toLocaleString('en-AU',{maximumFractionDigits:0}) : '—'}</td>
+                <td style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:11px;color:${net>=0?'var(--green)':'var(--red)'};">${net !== 0 ? (net>=0?'+':'')+navFmt$(net) : '—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  // Load current month data into form
+  loadFundDataMonth();
+}
+
+function loadFundDataMonth() {
+  let fundData = {};
+  try { fundData = JSON.parse(localStorage.getItem('mtc_bag_funddata') || '{}'); } catch(e) {}
+  const month = document.getElementById('fd-month')?.value;
+  if (!month) return;
+  const row = fundData[month] || {};
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+  set('fd-units',   row.units   || '');
+  set('fd-navpu',   row.navpu   || '');
+  set('fd-mgmtfee', row.mgmtfee || '');
+  set('fd-bcfee',   row.bcfee   || '3850');
+  set('fd-notes',   row.notes   || '');
+  renderFundDataEntries('app', row.applications || []);
+  renderFundDataEntries('red', row.redemptions  || []);
+}
+
+function renderFundDataEntries(type, entries) {
+  const container = document.getElementById(`fd-${type}s-list`);
+  if (!container) return;
+  if (!entries.length) {
+    container.innerHTML = `<div style="font-size:10px;color:var(--subtle);font-family:var(--mono);padding:4px 0;">None this month</div>`;
+    return;
+  }
+  container.innerHTML = entries.map((e, i) => `
+    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center;margin-bottom:6px;">
+      <input type="text" placeholder="Investor name" value="${e.name||''}"
+        onchange="updateFundDataEntry('${type}',${i},'name',this.value)"
+        style="font-family:var(--mono);font-size:11px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);outline:none;"/>
+      <input type="number" placeholder="AUD amount" value="${e.amount||''}"
+        onchange="updateFundDataEntry('${type}',${i},'amount',this.value)"
+        style="font-family:var(--mono);font-size:11px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);outline:none;"/>
+      <button onclick="removeFundDataEntry('${type}',${i})"
+        style="background:none;border:1px solid var(--border);color:var(--subtle);cursor:pointer;padding:4px 8px;border-radius:var(--r-sm);font-size:11px;">✕</button>
+    </div>`).join('');
+}
+
+// In-memory staging for current form entries
+let _fdApps = [], _fdReds = [];
+
+function addFundDataEntry(type) {
+  if (type === 'app') { _fdApps.push({name:'',amount:''}); renderFundDataEntries('app', _fdApps); }
+  else                { _fdReds.push({name:'',amount:''}); renderFundDataEntries('red', _fdReds); }
+}
+function updateFundDataEntry(type, idx, field, val) {
+  if (type === 'app') _fdApps[idx][field] = val;
+  else                _fdReds[idx][field] = val;
+}
+function removeFundDataEntry(type, idx) {
+  if (type === 'app') { _fdApps.splice(idx,1); renderFundDataEntries('app', _fdApps); }
+  else                { _fdReds.splice(idx,1); renderFundDataEntries('red', _fdReds); }
+}
+
+function saveFundDataMonth() {
+  const month = document.getElementById('fd-month')?.value;
+  if (!month) return;
+  let fundData = {};
+  try { fundData = JSON.parse(localStorage.getItem('mtc_bag_funddata') || '{}'); } catch(e) {}
+  fundData[month] = {
+    units:        document.getElementById('fd-units')?.value   || '',
+    navpu:        document.getElementById('fd-navpu')?.value   || '',
+    mgmtfee:      document.getElementById('fd-mgmtfee')?.value || '',
+    bcfee:        document.getElementById('fd-bcfee')?.value   || '',
+    notes:        document.getElementById('fd-notes')?.value   || '',
+    applications: _fdApps.filter(e => e.name || e.amount),
+    redemptions:  _fdReds.filter(e => e.name || e.amount),
+    savedAt:      new Date().toISOString()
+  };
+  try {
+    localStorage.setItem('mtc_bag_funddata', JSON.stringify(fundData));
+    const st = document.getElementById('fd-save-status');
+    if (st) { st.textContent = '✓ Saved'; st.style.color = 'var(--green)'; setTimeout(() => { if(st) st.textContent=''; }, 3000); }
+    // Refresh the history table
+    renderBagFundData();
+  } catch(e) {
+    const st = document.getElementById('fd-save-status');
+    if (st) { st.textContent = '✗ Save failed: ' + e.message; st.style.color = 'var(--red)'; }
+  }
+  if (typeof addAlert === 'function') {
+    const apps = _fdApps.reduce((s,a) => s + (parseFloat(a.amount)||0), 0);
+    const reds = _fdReds.reduce((s,a)  => s + (parseFloat(a.amount)||0), 0);
+    if (apps > 0) addAlert('info', 'Application recorded', `${month}: $${apps.toLocaleString('en-AU')} AUD`);
+    if (reds > 0) addAlert('warn', 'Redemption recorded',  `${month}: $${reds.toLocaleString('en-AU')} AUD`);
+  }
 }
 
 // ═══════════════════════════════════════
