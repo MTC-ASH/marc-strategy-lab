@@ -81,9 +81,10 @@ async function dbLogin(email, password) {
   });
   const d = await r.json();
   if (d.error) throw new Error(d.error);
-  _marcDB.jwt = d.access_token;
+  const token = d.token || d.access_token;
+  _marcDB.jwt = token;
   // Persist token
-  try { localStorage.setItem('marc_jwt', d.access_token); } catch(e) {}
+  try { localStorage.setItem('marc_jwt', token); } catch(e) {}
   return d;
 }
 
@@ -91,10 +92,11 @@ async function dbVerifyToken(token) {
   _marcDB.jwt = token;
   const r = await fetch(_api() + '/auth/verify', {
     method: 'POST',
-    headers: {'Content-Type':'application/json','Authorization':'Bearer '+token,'Origin':'https://mtc-ash.github.io'}
+    headers: {'Content-Type':'application/json','Origin':'https://mtc-ash.github.io'},
+    body: JSON.stringify({token})
   });
   const d = await r.json();
-  if (d.error) { _marcDB.jwt = null; throw new Error(d.error); }
+  if (!d.valid) { _marcDB.jwt = null; throw new Error('Token invalid'); }
   return d.user;
 }
 
