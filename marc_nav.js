@@ -732,7 +732,7 @@ function renderNavCharts(rows, totalValue) {
   var base = {
     paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
     font:{family:"'DM Mono',monospace", size:9, color:'#8888AA'},
-    margin:{l:4,r:4,t:4,b:4}, showlegend:false
+    margin:{l:4,r:4,t:4,b:4}, showlegend:false, height:160
   };
   var TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00D68F'};
   var held = rows.filter(function(r){return r.hasPos&&r.value>0;});
@@ -1618,11 +1618,16 @@ function renderFundTabs() {
     var cls = isActive
       ? (fund.type === 'live' ? 'active-live' : 'active-experimental')
       : 'inactive';
-    return '<button class="fund-tab ' + cls + '" onclick="activateFund(' + JSON.stringify(JSON.stringify(fund)).slice(1,-1) + ')" '
+    return '<button class="fund-tab ' + cls + '" onclick="activateFundById(\'' + fund.id + '\')" '
       + 'style="' + (isActive ? 'border-color:' + fund.color + ';color:' + fund.color + ';background:' + fund.color + '22;' : '') + '">'
       + (fund.type === 'live' ? '◆' : '◈') + ' ' + fund.name
       + '</button>';
   }).join('');
+}
+
+function activateFundById(id) {
+  var fund = _marcDB.funds.find(function(f){ return f.id === id; });
+  if (fund) activateFund(fund);
 }
 
 async function activateFund(fund) {
