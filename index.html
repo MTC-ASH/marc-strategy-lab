@@ -94,9 +94,9 @@ html, body {
   align-items: center;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  z-index: 100;
+  z-index: 200;
   flex-shrink: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 /* Brand */
@@ -281,7 +281,7 @@ html, body {
   border: 1px solid var(--border2);
   border-radius: var(--r-lg);
   box-shadow: 0 16px 48px rgba(0,0,0,0.6);
-  z-index: 500;
+  z-index: 9999;
   overflow: hidden;
 }
 #alert-tray.open { display: block; }
@@ -1494,6 +1494,7 @@ select.ctrl-sel:focus { outline: none; border-color: var(--blue); }
     <div class="stab" onclick="switchBagTab('nav')">NAV &amp; Holdings</div>
     <div class="stab" onclick="switchBagTab('signal')">Rebalance Signal</div>
     <div class="stab" onclick="switchBagTab('performance')">Performance</div>
+    <div class="stab" onclick="switchBagTab('funddata')">Fund Data</div>
     <div class="stab" onclick="switchBagTab('models')">Model Library</div>
   </div>
 
@@ -1747,6 +1748,11 @@ select.ctrl-sel:focus { outline: none; border-color: var(--blue); }
     <div class="card-grid card-grid-2-1" id="bag-models-grid"></div>
   </div>
 
+  <!-- Fund Data sub-page -->
+  <div class="subpage" id="bag-funddata">
+    <div class="card-grid" style="grid-template-columns:1fr 1fr;padding:14px;gap:12px;overflow-y:auto;flex:1;" id="bag-funddata-grid"></div>
+  </div>
+
 </div><!-- /mode-bag -->
 
 
@@ -1825,7 +1831,6 @@ select.ctrl-sel:focus { outline: none; border-color: var(--blue); }
               <option value="sortino">Max Sortino</option>
               <option value="turnover">Min Churn</option>
             </select>
-            <button id="opt-btn" onclick="runOptimise()" style="font-size:10px;background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);padding:3px 8px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--sans);font-weight:600;white-space:nowrap;">Go</button>
           </div>
           <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;">
             <span style="font-size:10px;color:var(--muted);flex:none;">Min Sharpe ≥</span>
@@ -2152,6 +2157,8 @@ function switchMode(mode) {
     labStrip.classList.add('visible');
     if (lpBtn) lpBtn.style.display = '';
     if (rpBtn) rpBtn.style.display = '';
+    // Init Lab AI tab if not already done
+    if (typeof initLab === 'function') initLab();
   } else {
     labStrip.classList.remove('visible');
     if (lpBtn) lpBtn.style.display = 'none';
