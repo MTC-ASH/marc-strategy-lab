@@ -594,7 +594,8 @@ function deleteModel(modelId) {
 // Wire up AI Research tab and model library link
 // ═══════════════════════════════════════
 function initLab() {
-  // Add AI Research tab button to the Lab tab bar
+  // Add AI Research tab when Research Lab mode is activated
+  // Called both on init and when user clicks the Lab tab
   const tabs = document.querySelector('#mode-lab .tabs');
   if (tabs && !document.getElementById('tab-btn-ai-research')) {
     const btn = document.createElement('div');
@@ -603,18 +604,25 @@ function initLab() {
     btn.textContent = '⬡ AI Research';
     btn.style.color = 'var(--green)';
     btn.onclick = () => {
-      // Activate this tab
       document.querySelectorAll('#mode-lab .tab-btn').forEach(t => t.classList.remove('active'));
       btn.classList.add('active');
       document.querySelectorAll('#mode-lab .tab-pane').forEach(p => p.classList.remove('active'));
+      // Create pane if it doesn't exist
+      let pane = document.getElementById('tab-ai-research');
+      if (!pane) {
+        pane = document.createElement('div');
+        pane.className = 'tab-pane';
+        pane.id = 'tab-ai-research';
+        const center = document.getElementById('center-panel');
+        if (center) center.appendChild(pane);
+      }
+      pane.classList.add('active');
       renderLabAIPanel();
-      const pane = document.getElementById('tab-ai-research');
-      if (pane) pane.classList.add('active');
     };
     tabs.appendChild(btn);
   }
 
-  // Render model library count in save button area
+  // Show model library count
   const models = loadModelLibrary();
   const statusEl = document.getElementById('save-model-status');
   if (statusEl && models.length) {
