@@ -2089,47 +2089,69 @@ select.ctrl-sel:focus { outline: none; border-color: var(--blue); }
      TRADE MODAL
      ════════════════════════════════════════════════════════════════ -->
 <div id="nav-trade-modal" style="display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.75);align-items:center;justify-content:center;">
-  <div style="background:var(--surface);border:1px solid var(--border2);border-radius:var(--r-lg);width:400px;box-shadow:0 20px 80px rgba(0,0,0,.7);">
+  <div style="background:var(--surface);border:1px solid var(--border2);border-radius:var(--r-lg);width:420px;box-shadow:0 20px 80px rgba(0,0,0,.7);">
     <div style="padding:13px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
       <h3 style="font-size:13px;font-weight:700;" id="nav-trade-title">Add Trade</h3>
       <button onclick="navCloseTradeModal()" style="background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;padding:3px 9px;border-radius:var(--r-sm);font-size:11px;">✕</button>
     </div>
     <div style="padding:14px 18px;display:flex;flex-direction:column;gap:10px;">
+
+      <!-- Direction + Date -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div>
           <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Direction</div>
           <select id="nav-trade-dir" class="ctrl-sel" style="width:100%;padding:5px 7px;font-size:12px;">
-            <option value="buy">Buy</option><option value="sell">Sell</option>
+            <option value="buy">Buy</option>
+            <option value="sell">Sell</option>
           </select>
         </div>
         <div>
           <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Date</div>
-          <input type="date" id="nav-trade-date" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);"/>
+          <input type="date" id="nav-trade-date" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);box-sizing:border-box;"/>
         </div>
       </div>
+
+      <!-- Asset -->
       <div>
         <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Asset</div>
         <select id="nav-trade-asset" class="ctrl-sel" style="width:100%;padding:5px 7px;font-size:12px;"></select>
       </div>
+
+      <!-- Reference price -->
+      <div id="nav-trade-ref-price" style="font-family:var(--mono);font-size:10px;color:var(--muted);padding:5px 8px;background:var(--surface2);border-radius:var(--r-sm);border:1px solid var(--border);">
+        Month-open price loading…
+      </div>
+
+      <!-- AUD Amount + Quantity -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <div>
-          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Quantity</div>
-          <input type="number" id="nav-trade-qty" placeholder="0.00" step="any" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);"/>
+          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">AUD Amount</div>
+          <input type="number" id="nav-trade-aud" placeholder="e.g. 250000" step="any"
+            style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"/>
         </div>
         <div>
-          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Price ($)</div>
-          <input type="number" id="nav-trade-price" placeholder="0.00" step="any" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);"/>
+          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Quantity (BTC / PAXG)</div>
+          <input type="number" id="nav-trade-qty" placeholder="e.g. 2.1719" step="any"
+            style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"/>
         </div>
       </div>
+
+      <!-- Notes -->
       <div>
         <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:4px;">Notes</div>
-        <input type="text" id="nav-trade-notes" placeholder="e.g. Regime rebalance" style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);"/>
+        <input type="text" id="nav-trade-notes" placeholder="e.g. Monthly rebalance"
+          style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"/>
       </div>
-      <div id="nav-trade-preview" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 10px;font-family:var(--mono);font-size:11px;color:var(--muted);">Total: —</div>
+
+      <!-- Live preview -->
+      <div id="nav-trade-preview" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px 12px;font-size:11px;color:var(--muted);min-height:44px;">
+        <span style="color:var(--subtle);">Enter AUD amount and quantity to see preview</span>
+      </div>
+
     </div>
     <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;">
       <button onclick="navCloseTradeModal()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:var(--r-sm);cursor:pointer;font-size:11px;">Cancel</button>
-      <button onclick="navSaveTrade()" style="background:var(--green);color:#000;border:none;padding:6px 18px;border-radius:var(--r-sm);cursor:pointer;font-size:12px;font-weight:700;">Save</button>
+      <button onclick="navSaveTrade()" style="background:var(--green);color:#000;border:none;padding:6px 18px;border-radius:var(--r-sm);cursor:pointer;font-size:12px;font-weight:700;">Save Trade</button>
     </div>
   </div>
 </div>
