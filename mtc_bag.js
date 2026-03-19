@@ -1621,14 +1621,22 @@ function navOpenTradeModal(asset, direction) {
     `<option value="${a}"${a===asset?' selected':''}>${a}</option>`
   ).join('');
 
-  // Show reference price
-  const refEl = document.getElementById('nav-trade-ref-price');
-  if (refEl) {
-    refEl.textContent = refPrice
-      ? `Month-open ref: $${refPrice.toLocaleString('en-AU',{maximumFractionDigits:2})} AUD`
-      : 'Month-open price not yet locked';
-    refEl.style.color = refPrice ? 'var(--muted)' : 'var(--amber)';
-  }
+  // Ref price — updates when asset changes
+  let currentRefPrice = refPrice;
+  const updateRefPrice = (selectedAsset) => {
+    const s    = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+    const ref  = selectedAsset === 'Bitcoin' ? s?.btc_price_aud : s?.gold_price_aud;
+    currentRefPrice = ref;
+    const refEl = document.getElementById('nav-trade-ref-price');
+    if (refEl) {
+      refEl.textContent = ref
+        ? `Month-open ref: $${ref.toLocaleString('en-AU',{maximumFractionDigits:2})} AUD (${selectedAsset==='Bitcoin'?'BTC':'PAXG'})`
+        : 'Month-open price not yet locked for this month';
+      refEl.style.color = ref ? 'var(--muted)' : 'var(--amber)';
+    }
+  };
+  sel.onchange = () => updateRefPrice(sel.value);
+  updateRefPrice(asset || 'Bitcoin');
 
   // Clear inputs
   const qtyEl = document.getElementById('nav-trade-qty');
@@ -1639,7 +1647,7 @@ function navOpenTradeModal(asset, direction) {
 
   modal.style.display = 'flex';
 
-  // Live preview
+  // Live preview — uses currentRefPrice which updates with asset change
   const update = () => {
     const qty = parseFloat(qtyEl?.value) || 0;
     const aud = parseFloat(audEl?.value) || 0;
@@ -1647,7 +1655,7 @@ function navOpenTradeModal(asset, direction) {
     if (!prev) return;
     if (qty > 0 && aud > 0) {
       const effectivePrice = aud / qty;
-      const slip = refPrice ? ((effectivePrice - refPrice) / refPrice * 100) : null;
+      const slip = currentRefPrice ? ((effectivePrice - currentRefPrice) / currentRefPrice * 100) : null;
       const slipColor = slip === null ? 'var(--subtle)' :
         Math.abs(slip) < 0.5 ? 'var(--green)' :
         Math.abs(slip) < 2   ? 'var(--amber)' : 'var(--red)';
