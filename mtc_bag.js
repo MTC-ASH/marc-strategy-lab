@@ -206,64 +206,148 @@ async function dbLoadTrades(fundId) {
   if (!_marcDB.jwt) return;
   const fid = fundId || (_marcDB.activeFund ? _marcDB.activeFund.id : null);
   if (!fid) return;
-  const r      = await fetch(_api() + '/db/trades?fund_id=' + fid, {headers: _authHeaders()});
+  // Load from bag_trades table (AUD-based)
+  const r      = await fetch(_api() + '/db/bag-trades?fund_id=' + fid, {headers: _authHeaders()});
   const trades = await r.json();
   if (!Array.isArray(trades)) return;
   _marcDB.cache.trades = trades.map(t => ({
-    id:        t.id,
-    asset:     t.asset,
-    direction: t.direction,
-    date:      t.date,
-    qty:       parseFloat(t.qty),
-    price:     parseFloat(t.price),
-    notes:     t.notes || '',
-    ts:        new Date(t.created_at).getTime()
+    id:               t.id,
+    asset:            t.asset,
+    direction:        t.direction,
+    date:             t.trade_date,
+    month:            t.month,
+    audAmount:        parseFloat(t.aud_amount),
+    qty:              parseFloat(t.quantity),
+    effectivePriceAUD: parseFloat(t.effective_price_aud),
+    referencePriceAUD: t.reference_price_aud ? parseFloat(t.reference_price_aud) : null,
+    slippagePct:      t.slippage_pct ? parseFloat(t.slippage_pct) : null,
+    slippageAUD:      t.slippage_aud ? parseFloat(t.slippage_aud) : null,
+    notes:            t.notes || '',
+    ts:               new Date(t.created_at).getTime()
   }));
-  try { localStorage.setItem('marc_nav_cache', JSON.stringify(_marcDB.cache)); } catch(e) {}
+  _marcDB.cache.tradesLoaded = true;
 }
 
 async function dbSaveTrade(trade) {
   if (!_marcDB.jwt || !_marcDB.activeFund) {
     _marcDB.cache.trades.push(trade);
-    navSave({trades: _marcDB.cache.trades});
     return trade;
   }
-  const r = await fetch(_api() + '/db/trades', {
+  // Get month from date
+  const month = trade.date.slice(0, 7);
+  // Get reference price (locked month-open price) from snapshot cache
+  const snap  = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
+  const refPrice = trade.asset === 'Bitcoin'
+    ? snap?.btc_price_aud
+    : snap?.gold_price_aud;
+  const effectivePrice = trade.audAmount / trade.qty;
+  const slippagePct = refPrice ? (effectivePrice - refPrice) / refPrice : null;
+  const slippageAUD = refPrice ? (effectivePrice - refPrice) * trade.qty : null;
+
+  const r = await fetch(_api() + '/db/bag-trades', {
     method:  'POST',
     headers: _authHeaders(),
     body:    JSON.stringify({
-      fund_id:   _marcDB.activeFund.id,
-      asset:     trade.asset,
-      direction: trade.direction,
-      date:      trade.date,
-      qty:       trade.qty,
-      price:     trade.price,
-      notes:     trade.notes || ''
+      fund_id:              _marcDB.activeFund.id,
+      month,
+      asset:                trade.asset,
+      direction:            trade.direction,
+      trade_date:           trade.date,
+      aud_amount:           trade.audAmount,
+      quantity:             trade.qty,
+      reference_price_aud:  refPrice || null,
+      slippage_pct:         slippagePct,
+      slippage_aud:         slippageAUD,
+      notes:                trade.notes || ''
     })
   });
   const d     = await r.json();
   if (d.error) throw new Error(d.error);
   const saved = Array.isArray(d) ? d[0] : d;
   const norm  = {
-    id:        saved.id,
-    asset:     saved.asset,
-    direction: saved.direction,
-    date:      saved.date,
-    qty:       parseFloat(saved.qty),
-    price:     parseFloat(saved.price),
-    notes:     saved.notes || '',
-    ts:        new Date(saved.created_at).getTime()
+    id:                saved.id,
+    asset:             saved.asset,
+    direction:         saved.direction,
+    date:              saved.trade_date,
+    month:             saved.month,
+    audAmount:         parseFloat(saved.aud_amount),
+    qty:               parseFloat(saved.quantity),
+    effectivePriceAUD: parseFloat(saved.effective_price_aud),
+    referencePriceAUD: saved.reference_price_aud ? parseFloat(saved.reference_price_aud) : null,
+    slippagePct:       saved.slippage_pct ? parseFloat(saved.slippage_pct) : null,
+    slippageAUD:       saved.slippage_aud ? parseFloat(saved.slippage_aud) : null,
+    notes:             saved.notes || '',
+    ts:                new Date(saved.created_at).getTime()
   };
   _marcDB.cache.trades.push(norm);
-  try { localStorage.setItem('marc_nav_cache', JSON.stringify(_marcDB.cache)); } catch(e) {}
   return norm;
 }
 
 async function dbDeleteTrade(id) {
   _marcDB.cache.trades = _marcDB.cache.trades.filter(t => t.id !== id);
-  navSave({trades: _marcDB.cache.trades});
   if (!_marcDB.jwt) return;
-  await fetch(_api() + '/db/trades/' + id, {method:'DELETE', headers: _authHeaders()});
+  await fetch(_api() + '/db/bag-trades/' + id, {method:'DELETE', headers: _authHeaders()});
+}
+
+// ── BAG Monthly Snapshots ─────────────────────────────────────
+async function dbLoadBagSnapshots(fundId) {
+  if (!_marcDB.jwt) return;
+  const fid = fundId || (_marcDB.activeFund ? _marcDB.activeFund.id : null);
+  if (!fid) return;
+  const r = await fetch(_api() + '/db/bag-snapshots?fund_id=' + fid, {headers: _authHeaders()});
+  const rows = await r.json();
+  if (!Array.isArray(rows)) return;
+  _marcDB.cache.bagSnapshots = rows;
+}
+
+async function dbSaveBagSnapshot(data) {
+  if (!_marcDB.jwt || !_marcDB.activeFund) return;
+  const r = await fetch(_api() + '/db/bag-snapshots', {
+    method:  'POST',
+    headers: _authHeaders(),
+    body:    JSON.stringify({fund_id: _marcDB.activeFund.id, ...data})
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  const saved = Array.isArray(d) ? d[0] : d;
+  // Update local cache
+  const idx = (_marcDB.cache.bagSnapshots || []).findIndex(s => s.month === saved.month);
+  if (idx >= 0) _marcDB.cache.bagSnapshots[idx] = saved;
+  else (_marcDB.cache.bagSnapshots = _marcDB.cache.bagSnapshots || []).push(saved);
+  return saved;
+}
+
+// ── BAG Cashflows ─────────────────────────────────────────────
+async function dbLoadBagCashflows(fundId, month) {
+  if (!_marcDB.jwt) return;
+  const fid = fundId || (_marcDB.activeFund ? _marcDB.activeFund.id : null);
+  if (!fid) return;
+  let url = _api() + '/db/bag-cashflows?fund_id=' + fid;
+  if (month) url += '&month=' + month;
+  const r = await fetch(url, {headers: _authHeaders()});
+  const rows = await r.json();
+  if (!Array.isArray(rows)) return;
+  _marcDB.cache.bagCashflows = rows;
+}
+
+async function dbSaveBagCashflow(data) {
+  if (!_marcDB.jwt || !_marcDB.activeFund) return;
+  const r = await fetch(_api() + '/db/bag-cashflows', {
+    method:  'POST',
+    headers: _authHeaders(),
+    body:    JSON.stringify({fund_id: _marcDB.activeFund.id, ...data})
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  const saved = Array.isArray(d) ? d[0] : d;
+  (_marcDB.cache.bagCashflows = _marcDB.cache.bagCashflows || []).push(saved);
+  return saved;
+}
+
+async function dbDeleteBagCashflow(id) {
+  if (!_marcDB.jwt) return;
+  await fetch(_api() + '/db/bag-cashflows?id=' + id, {method:'DELETE', headers: _authHeaders()});
+  _marcDB.cache.bagCashflows = (_marcDB.cache.bagCashflows || []).filter(c => c.id !== id);
 }
 
 async function dbSavePrices(prices) {
@@ -362,13 +446,6 @@ async function dbInit() {
   try {
     const savedJwt   = localStorage.getItem('marc_jwt');
     const savedFund  = localStorage.getItem('marc_active_fund');
-    const savedCache = localStorage.getItem('marc_nav_cache');
-    if (savedCache) {
-      const c = JSON.parse(savedCache);
-      _marcDB.cache.trades      = c.trades      || [];
-      _marcDB.cache.prices      = c.prices      || {};
-      _marcDB.cache.lastFetched = c.lastFetched || null;
-    }
     if (savedFund) _marcDB.activeFund = JSON.parse(savedFund);
     if (savedJwt) {
       try {
@@ -378,7 +455,21 @@ async function dbInit() {
           await dbLoadTrades(_marcDB.activeFund.id);
           await dbLoadPrices();
           await dbLoadMessages(_marcDB.activeFund.id);
+          await dbLoadBagSnapshots(_marcDB.activeFund.id);
+          await dbLoadBagCashflows(_marcDB.activeFund.id);
         }
+        // Fetch authoritative server time
+        try {
+          const tr = await fetch(_api() + '/time');
+          const td = await tr.json();
+          _marcDB.serverTime = td;
+          _marcDB.currentMonth = td.currentMonth;
+          _marcDB.isMonthOpen  = td.isMonthOpen;
+          // Auto-lock month-open prices if it's the 1st and not yet locked
+          if (td.isMonthOpen && _marcDB.activeFund) {
+            await maybeAutoLockMonthOpen(td.year, td.month);
+          }
+        } catch(e) { console.warn('Server time fetch failed:', e); }
         return true;
       } catch(e) {
         localStorage.removeItem('marc_jwt');
@@ -389,20 +480,54 @@ async function dbInit() {
   return false;
 }
 
-// ═══════════════════════════════════════
-// POSITION ENGINE
-// ═══════════════════════════════════════
+// ── Auto-lock month-open prices ──────────────────────────────
+async function maybeAutoLockMonthOpen(year, month) {
+  if (!_marcDB.activeFund) return;
+  const monthStr = `${year}-${String(month).padStart(2,'0')}`;
+  const existing = (_marcDB.cache.bagSnapshots || []).find(s => s.month === monthStr);
+  if (existing?.prices_locked) return; // already locked
+  try {
+    const r = await fetch(`${_api()}/prices/month-open?year=${year}&month=${month}`);
+    const d = await r.json();
+    if (d.prices?.Bitcoin?.priceAUD && d.prices?.['PAX Gold']?.priceAUD) {
+      await dbSaveBagSnapshot({
+        month:            monthStr,
+        btc_price_aud:    d.prices.Bitcoin.priceAUD,
+        gold_price_aud:   d.prices['PAX Gold'].priceAUD,
+        btc_price_usd:    d.prices.Bitcoin.priceUSD,
+        gold_price_usd:   d.prices['PAX Gold'].priceUSD,
+        aud_usd_rate:     d.audUsd,
+        prices_locked:    true,
+        prices_locked_at: new Date().toISOString()
+      });
+      console.log(`Month-open prices locked for ${monthStr}:`, d.prices.Bitcoin.priceAUD, d.prices['PAX Gold'].priceAUD);
+      if (typeof addAlert === 'function') {
+        addAlert('info', 'Prices locked', `${monthStr} month-open: BTC $${Math.round(d.prices.Bitcoin.priceAUD).toLocaleString('en-AU')} AUD`);
+      }
+    }
+  } catch(e) { console.warn('Auto-lock month-open failed:', e); }
+}
+
+// ── Position Engine ───────────────────────────────────────────
+// Derives current holdings from trade log
+// Returns { asset: { qty, totalAUDSpent, avgCostAUD } }
 function computePositions(trades) {
   const pos = {};
-  trades.forEach(t => {
-    if (!pos[t.asset]) pos[t.asset] = {qty: 0, costBasis: 0};
+  [...trades].sort((a, b) => new Date(a.date) - new Date(b.date)).forEach(t => {
+    if (!pos[t.asset]) pos[t.asset] = {qty: 0, totalAUDSpent: 0, avgCostAUD: 0};
     const p = pos[t.asset];
     if (t.direction === 'buy') {
-      const newQty = p.qty + t.qty;
-      p.costBasis  = newQty > 0 ? (p.costBasis * p.qty + t.price * t.qty) / newQty : 0;
-      p.qty        = newQty;
+      const newQty     = p.qty + t.qty;
+      const newSpent   = p.totalAUDSpent + t.audAmount;
+      p.avgCostAUD     = newQty > 0 ? newSpent / newQty : 0;
+      p.totalAUDSpent  = newSpent;
+      p.qty            = newQty;
     } else {
-      p.qty = Math.max(0, p.qty - t.qty);
+      // Sell — reduce qty proportionally, reduce cost basis
+      const sellRatio   = Math.min(1, t.qty / Math.max(p.qty, 0.000001));
+      p.totalAUDSpent  -= p.totalAUDSpent * sellRatio;
+      p.qty             = Math.max(0, p.qty - t.qty);
+      if (p.qty <= 0) p.totalAUDSpent = 0;
     }
   });
   Object.keys(pos).forEach(k => { if (pos[k].qty <= 0.000001) delete pos[k]; });
@@ -1474,67 +1599,112 @@ function computePeriodReturn(trades, prices, fromDate) {
 }
 
 // ═══════════════════════════════════════
-// TRADE MODAL
+// TRADE MODAL — AUD first
+// Input: AUD amount + quantity → derives effective price + slippage
 // ═══════════════════════════════════════
 function navOpenTradeModal(asset, direction) {
   const modal = document.getElementById('nav-trade-modal');
   if (!modal) return;
+
+  // Get current month locked reference price
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  const snap     = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+  const refPrice = asset === 'Bitcoin' ? snap?.btc_price_aud : snap?.gold_price_aud;
+
+  document.getElementById('nav-trade-dir').value   = direction || 'buy';
+  document.getElementById('nav-trade-date').value  = new Date().toISOString().split('T')[0];
+  document.getElementById('nav-trade-notes').value = '';
+  document.getElementById('nav-trade-title').textContent = (direction==='sell'?'Sell ':'Buy ') + (asset||'Asset');
+
   const sel = document.getElementById('nav-trade-asset');
-  // BAG Fund only trades Bitcoin and PAX Gold
-  const BAG_ASSETS = ['Bitcoin', 'PAX Gold'];
-  sel.innerHTML = BAG_ASSETS.map(a =>
+  sel.innerHTML = ['Bitcoin','PAX Gold'].map(a =>
     `<option value="${a}"${a===asset?' selected':''}>${a}</option>`
   ).join('');
-  if (direction) document.getElementById('nav-trade-dir').value = direction;
-  document.getElementById('nav-trade-date').value  = new Date().toISOString().split('T')[0];
-  document.getElementById('nav-trade-qty').value   = '';
-  document.getElementById('nav-trade-price').value = '';
-  document.getElementById('nav-trade-notes').value = '';
-  document.getElementById('nav-trade-preview').textContent = 'Total: —';
-  document.getElementById('nav-trade-title').textContent = (direction==='sell'?'Sell ':'Buy ') + (asset||'Asset');
+
+  // Show reference price
+  const refEl = document.getElementById('nav-trade-ref-price');
+  if (refEl) {
+    refEl.textContent = refPrice
+      ? `Month-open ref: $${refPrice.toLocaleString('en-AU',{maximumFractionDigits:2})} AUD`
+      : 'Month-open price not yet locked';
+    refEl.style.color = refPrice ? 'var(--muted)' : 'var(--amber)';
+  }
+
+  // Clear inputs
+  const qtyEl = document.getElementById('nav-trade-qty');
+  const audEl = document.getElementById('nav-trade-aud');
+  if (qtyEl) qtyEl.value = '';
+  if (audEl) audEl.value = '';
+  document.getElementById('nav-trade-preview').innerHTML = '<span style="color:var(--subtle);">Enter AUD amount and quantity to see preview</span>';
+
   modal.style.display = 'flex';
+
+  // Live preview
   const update = () => {
-    const qty   = parseFloat(document.getElementById('nav-trade-qty').value)   || 0;
-    const price = parseFloat(document.getElementById('nav-trade-price').value) || 0;
-    document.getElementById('nav-trade-preview').textContent = qty && price ? 'Total: ' + navFmt$(qty*price) : 'Total: —';
+    const qty = parseFloat(qtyEl?.value) || 0;
+    const aud = parseFloat(audEl?.value) || 0;
+    const prev = document.getElementById('nav-trade-preview');
+    if (!prev) return;
+    if (qty > 0 && aud > 0) {
+      const effectivePrice = aud / qty;
+      const slip = refPrice ? ((effectivePrice - refPrice) / refPrice * 100) : null;
+      const slipColor = slip === null ? 'var(--subtle)' :
+        Math.abs(slip) < 0.5 ? 'var(--green)' :
+        Math.abs(slip) < 2   ? 'var(--amber)' : 'var(--red)';
+      prev.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
+          <div>
+            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">Effective Price</div>
+            <div style="font-family:var(--mono);font-weight:600;">$${effectivePrice.toLocaleString('en-AU',{maximumFractionDigits:2})} AUD</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">Total AUD</div>
+            <div style="font-family:var(--mono);font-weight:600;">${navFmt$(aud)}</div>
+          </div>
+          ${slip !== null ? `
+          <div style="grid-column:span 2;">
+            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">Slippage vs month-open</div>
+            <div style="font-family:var(--mono);font-weight:600;color:${slipColor};">${slip>=0?'+':''}${slip.toFixed(3)}%</div>
+          </div>` : ''}
+        </div>`;
+    } else {
+      prev.innerHTML = '<span style="color:var(--subtle);">Enter AUD amount and quantity to see preview</span>';
+    }
   };
-  document.getElementById('nav-trade-qty').oninput   = update;
-  document.getElementById('nav-trade-price').oninput = update;
+  if (qtyEl) qtyEl.oninput = update;
+  if (audEl) audEl.oninput = update;
 }
+
 function navCloseTradeModal() {
   const m = document.getElementById('nav-trade-modal');
   if (m) m.style.display = 'none';
 }
 
 async function navSaveTrade() {
-  const asset = document.getElementById('nav-trade-asset').value;
-  const dir   = document.getElementById('nav-trade-dir').value;
-  const date  = document.getElementById('nav-trade-date').value;
-  const qty   = parseFloat(document.getElementById('nav-trade-qty').value);
-  const price = parseFloat(document.getElementById('nav-trade-price').value);
-  const notes = document.getElementById('nav-trade-notes').value.trim();
-  if (!asset || !date || !qty || qty<=0 || !price || price<=0) { alert('Fill in all fields.'); return; }
+  const asset     = document.getElementById('nav-trade-asset').value;
+  const dir       = document.getElementById('nav-trade-dir').value;
+  const date      = document.getElementById('nav-trade-date').value;
+  const qty       = parseFloat(document.getElementById('nav-trade-qty')?.value);
+  const audAmount = parseFloat(document.getElementById('nav-trade-aud')?.value);
+  const notes     = document.getElementById('nav-trade-notes').value.trim();
+
+  if (!asset || !date || !qty || qty<=0 || !audAmount || audAmount<=0) {
+    alert('Please fill in asset, date, quantity and AUD amount.'); return;
+  }
   const btn = document.querySelector('#nav-trade-modal button[onclick="navSaveTrade()"]');
   if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
   try {
-    const trade = {id: Date.now().toString(), asset, direction:dir, date, qty, price, notes, ts: Date.now()};
-    await dbSaveTrade(trade);
+    await dbSaveTrade({asset, direction:dir, date, audAmount, qty, notes, ts:Date.now()});
     navCloseTradeModal();
-    // Snapshot
-    const data = navLoad(), positions = computePositions(data.trades), prices2 = data.prices || {};
-    let totalValue=0, totalCost=0;
-    Object.keys(positions).forEach(a => {
-      const p=positions[a], cp=prices2[a]?prices2[a].price:p.costBasis;
-      totalValue+=p.qty*cp; totalCost+=p.qty*p.costBasis;
-    });
-    const regime = document.getElementById('nav-regime-pill')?.textContent?.trim() || '';
-    dbSaveSnapshot(totalValue, totalCost, totalValue-totalCost, regime);
+    await dbLoadBagSnapshots(_marcDB.activeFund?.id);
     renderNavDashboard();
     renderBagOverview();
     checkDriftAlert();
-  } catch(e) {
-    alert('Failed to save trade: ' + e.message);
-  }
+    if (typeof addAlert === 'function') {
+      addAlert('info', 'Trade saved',
+        `${dir==='buy'?'Bought':'Sold'} ${navFmtQty(qty)} ${asset} for ${navFmt$(audAmount)} AUD`);
+    }
+  } catch(e) { alert('Failed to save trade: ' + e.message); }
   if (btn) { btn.textContent = 'Save'; btn.disabled = false; }
 }
 
