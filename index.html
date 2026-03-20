@@ -1490,10 +1490,9 @@ select.ctrl-sel:focus { outline: none; border-color: var(--blue); }
 
   <!-- Sub-tab bar -->
   <div class="subtab-bar">
-    <div class="stab active" onclick="switchBagTab('overview')">Overview</div>
+    <div class="stab active" onclick="switchBagTab('overview')">Overview & Performance</div>
     <div class="stab" onclick="switchBagTab('nav')">NAV &amp; Holdings</div>
     <div class="stab" onclick="switchBagTab('navnumbers')">NAV Numbers</div>
-    <div class="stab" onclick="switchBagTab('performance')">Performance</div>
     <div class="stab" onclick="switchBagTab('strategy')">Strategy</div>
     <div class="stab" onclick="switchBagTab('models')">Model Library</div>
   </div>
@@ -1533,11 +1532,27 @@ select.ctrl-sel:focus { outline: none; border-color: var(--blue); }
         <div class="kpi-s" id="bag-kpi-rebal-sub">—</div>
       </div>
     </div>
-    <!-- Card grid populated by mtc_bag.js -->
-    <div class="card-grid card-grid-3" id="bag-overview-grid"></div>
+    <!-- Card grid populated by renderBagOverview — includes both overview and performance charts -->
+    <div id="bag-overview-grid" style="flex:1;overflow-y:auto;padding:14px;display:grid;grid-template-columns:1fr 1fr;gap:12px;align-content:start;"></div>
   </div>
 
-  <!-- NAV & Holdings sub-page — uses existing nav section structure -->
+  <!-- Strategy tab -->
+  <div class="subpage" id="bag-strategy">
+    <div style="display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden;">
+      <div style="padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;">
+        <span style="font-size:13px;font-weight:600;">Strategy</span>
+        <span style="font-size:10px;color:var(--subtle);font-family:var(--mono);">BAG signal engine · ISM / MVRV / Fed Rate → BTC & Gold weights</span>
+      </div>
+      <div id="bag-strategy-grid" style="flex:1;overflow-y:auto;padding:14px;display:grid;grid-template-columns:1fr 1fr;gap:12px;align-content:start;"></div>
+    </div>
+  </div>
+
+  <!-- Model Library sub-page -->
+  <div class="subpage" id="bag-models">
+    <div class="card-grid card-grid-2-1" id="bag-models-grid"></div>
+  </div>
+
+</div><!-- /mode-bag -->
   <div class="subpage" id="bag-nav">
     <div id="nav-section" style="display:flex;flex:1;flex-direction:column;min-height:0;position:relative;">
 
@@ -1719,19 +1734,6 @@ select.ctrl-sel:focus { outline: none; border-color: var(--blue); }
         <div id="bag-navnumbers-grid"></div>
       </div>
     </div>
-  </div>
-
-  <!-- Performance sub-page -->
-  <div class="subpage" id="bag-performance">
-    <div class="bag-kpi-strip" id="bag-perf-kpi-strip">
-      <div class="kpi-cell"><div class="kpi-l">Total Return</div><div class="kpi-v g" id="perf-kpi-ret">—</div><div class="kpi-s">since inception</div></div>
-      <div class="kpi-cell"><div class="kpi-l">Sharpe Ratio</div><div class="kpi-v b" id="perf-kpi-sharpe">—</div><div class="kpi-s">risk-adjusted</div></div>
-      <div class="kpi-cell"><div class="kpi-l">Max Drawdown</div><div class="kpi-v r" id="perf-kpi-mdd">—</div><div class="kpi-s">peak to trough</div></div>
-      <div class="kpi-cell"><div class="kpi-l">Best Month</div><div class="kpi-v g" id="perf-kpi-best">—</div><div class="kpi-s">—</div></div>
-      <div class="kpi-cell"><div class="kpi-l">Worst Month</div><div class="kpi-v r" id="perf-kpi-worst">—</div><div class="kpi-s">—</div></div>
-      <div class="kpi-cell"><div class="kpi-l">Sortino</div><div class="kpi-v b" id="perf-kpi-sortino">—</div><div class="kpi-s">downside ratio</div></div>
-    </div>
-    <div class="card-grid" style="grid-template-columns:1fr 1fr;padding:14px;gap:12px;overflow-y:auto;flex:1;" id="bag-perf-grid"></div>
   </div>
 
   <!-- Strategy tab -->
