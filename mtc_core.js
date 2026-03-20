@@ -355,13 +355,19 @@ function runBacktest() {
   const ed = document.getElementById('end-date').value;
   if (sd) startDate = sd;
   if (ed) endDate   = ed;
-  const btn = document.getElementById('run-btn');
+  const btn    = document.getElementById('run-btn');
+  const optObj = document.getElementById('opt-obj')?.value || '';
   btn.disabled = true; btn.textContent = 'Computing…';
   setTimeout(() => {
     sensiCache = {};
     _doBacktest(params.alpha, params.mcbeta, params.n);
-    btn.disabled = false; btn.textContent = '▶  Run Backtest';
-    refreshAll();
+    // Auto-run optimiser if an objective is selected
+    if (optObj) {
+      runOptimise();
+    } else {
+      btn.disabled = false; btn.textContent = '▶  Run Backtest';
+      refreshAll();
+    }
   }, 20);
 }
 
@@ -409,12 +415,11 @@ function objScore(stats, obj) {
 // OPTIMISER
 // ═══════════════════════════════════════
 function runOptimise() {
-  const btn = document.getElementById('opt-btn');
-  const obj = document.getElementById('opt-obj').value;
-  const sf  = parseFloat(document.getElementById('sharpe-floor').value) || 0;
-  btn.disabled = true; btn.textContent = '…';
-  document.getElementById('opt-status').textContent = sf > 0
-    ? `Searching (Sharpe ≥ ${sf})…` : 'Searching…';
+  const obj    = document.getElementById('opt-obj')?.value || 'sharpe';
+  const sf     = parseFloat(document.getElementById('sharpe-floor')?.value) || 0;
+  const runBtn = document.getElementById('run-btn');
+  const status = document.getElementById('opt-status');
+  if (status) status.textContent = sf > 0 ? `Optimising (Sharpe ≥ ${sf})…` : 'Optimising…';
   setTimeout(() => {
     const alphas = lockedParams.alpha  ? [params.alpha]  : [0.2,0.5,0.8,1.0,1.5,2.0,3.0,4.0];
     const betas  = lockedParams.mcbeta ? [params.mcbeta] : [0,0.25,0.5,0.75,1.0];
@@ -431,15 +436,16 @@ function runOptimise() {
       if (s > best.score) best = {score: s, alpha: a, mcbeta: b, n, sharpe: stats.sharpe};
     }
     if (!feasible) {
-      document.getElementById('opt-status').textContent =
-        `✗ No params with Sharpe ≥ ${sf}. Try lower floor.`;
-      btn.disabled = false; btn.textContent = 'Go';
+      if (status) status.textContent = `✗ No params with Sharpe ≥ ${sf}. Try lower floor.`;
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = '▶  Run Backtest'; }
       _doBacktest(params.alpha, params.mcbeta, params.n);
+      refreshAll();
       return;
     }
     params = {alpha: best.alpha, mcbeta: best.mcbeta, n: best.n};
     ['alpha','mcbeta','n'].forEach(k => {
-      document.getElementById(`sl-${k}`).value = params[k];
+      const sl = document.getElementById(`sl-${k}`);
+      if (sl) sl.value = params[k];
       liveParam(k, params[k]);
     });
     sensiCache = {};
@@ -447,9 +453,8 @@ function runOptimise() {
     const sc   = obj === 'cagr' || obj === 'turnover'
       ? (best.score*100).toFixed(1) + '%' : best.score.toFixed(2);
     const note = sf > 0 ? `  Sharpe=${best.sharpe.toFixed(2)}` : '';
-    document.getElementById('opt-status').textContent =
-      `✓ ${obj}: ${sc}  α=${best.alpha} N=${best.n}${note}`;
-    btn.disabled = false; btn.textContent = 'Go';
+    if (status) status.textContent = `✓ ${obj}: ${sc}  α=${best.alpha} N=${best.n}${note}`;
+    if (runBtn) { runBtn.disabled = false; runBtn.textContent = '▶  Run Backtest'; }
     refreshAll();
   }, 30);
 }
