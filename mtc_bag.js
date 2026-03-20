@@ -233,38 +233,36 @@ async function dbSaveTrade(trade) {
     _marcDB.cache.trades.push(trade);
     return trade;
   }
-  // Get month from date
-  const month = trade.date.slice(0, 7);
-  // Get reference price (locked month-open price) from snapshot cache
-  const snap  = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
-  const refPrice = trade.asset === 'Bitcoin'
-    ? snap?.btc_price_aud
-    : snap?.gold_price_aud;
-  const effectivePrice = trade.audAmount / trade.qty;
-  const slippagePct = refPrice ? (effectivePrice - refPrice) / refPrice : null;
-  const slippageAUD = refPrice ? (effectivePrice - refPrice) * trade.qty : null;
+  const month    = trade.date.slice(0, 7);
+  const snap     = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
+  const refPrice = trade.asset === 'Bitcoin' ? snap?.btc_price_aud : snap?.gold_price_aud;
+
+  // Fee = AUD spent − (qty × execution price)
+  // execution price comes from nav-trade-price-aud input
+  const execPrice    = trade.execPriceAUD || null;
+  const feeAUD       = execPrice ? trade.audAmount - (trade.qty * execPrice) : null;
 
   const r = await fetch(_api() + '/db/bag-trades', {
     method:  'POST',
     headers: _authHeaders(),
     body:    JSON.stringify({
-      fund_id:              _marcDB.activeFund.id,
+      fund_id:             _marcDB.activeFund.id,
       month,
-      asset:                trade.asset,
-      direction:            trade.direction,
-      trade_date:           trade.date,
-      aud_amount:           trade.audAmount,
-      quantity:             trade.qty,
-      reference_price_aud:  refPrice || null,
-      slippage_pct:         slippagePct,
-      slippage_aud:         slippageAUD,
-      notes:                trade.notes || ''
+      asset:               trade.asset,
+      direction:           trade.direction,
+      trade_date:          trade.date,
+      aud_amount:          trade.audAmount,
+      quantity:            trade.qty,
+      reference_price_aud: execPrice || null,   // store exec price in reference_price_aud field
+      slippage_aud:        feeAUD,              // store fee AUD in slippage_aud field
+      notes:               trade.notes || ''
     })
   });
-  const d     = await r.json();
-  if (d.error) throw new Error(d.error);
+  const d    = await r.json();
+  if (d.error) throw new Error(JSON.stringify(d.error));
   const saved = Array.isArray(d) ? d[0] : d;
-  const norm  = {
+  if (!saved?.id) throw new Error('Save failed — no ID returned: ' + JSON.stringify(d));
+  const norm = {
     id:                saved.id,
     asset:             saved.asset,
     direction:         saved.direction,
@@ -274,8 +272,7 @@ async function dbSaveTrade(trade) {
     qty:               parseFloat(saved.quantity),
     effectivePriceAUD: parseFloat(saved.effective_price_aud),
     referencePriceAUD: saved.reference_price_aud ? parseFloat(saved.reference_price_aud) : null,
-    slippagePct:       saved.slippage_pct ? parseFloat(saved.slippage_pct) : null,
-    slippageAUD:       saved.slippage_aud ? parseFloat(saved.slippage_aud) : null,
+    feeAUD:            saved.slippage_aud        ? parseFloat(saved.slippage_aud)         : null,
     notes:             saved.notes || '',
     ts:                new Date(saved.created_at).getTime()
   };
@@ -1605,17 +1602,17 @@ function navOpenTradeModal(asset, direction) {
     `<option value="${a}"${a===asset?' selected':''}>${a}</option>`
   ).join('');
 
-  // Ref price — updates when asset changes
+  // Ref price — updates when asset changes (for display only)
   let currentRefPrice = refPrice;
   const updateRefPrice = (selectedAsset) => {
-    const s    = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
-    const ref  = selectedAsset === 'Bitcoin' ? s?.btc_price_aud : s?.gold_price_aud;
+    const s   = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+    const ref = selectedAsset === 'Bitcoin' ? s?.btc_price_aud : s?.gold_price_aud;
     currentRefPrice = ref;
     const refEl = document.getElementById('nav-trade-ref-price');
     if (refEl) {
       refEl.textContent = ref
-        ? `Month-open ref: $${ref.toLocaleString('en-AU',{maximumFractionDigits:2})} AUD (${selectedAsset==='Bitcoin'?'BTC':'PAXG'})`
-        : 'Month-open price not yet locked for this month';
+        ? `Month-open ref: $${parseFloat(ref).toLocaleString('en-AU',{maximumFractionDigits:2})} AUD`
+        : 'Month-open price not yet locked';
       refEl.style.color = ref ? 'var(--muted)' : 'var(--amber)';
     }
   };
@@ -1623,48 +1620,52 @@ function navOpenTradeModal(asset, direction) {
   updateRefPrice(asset || 'Bitcoin');
 
   // Clear inputs
-  const qtyEl = document.getElementById('nav-trade-qty');
-  const audEl = document.getElementById('nav-trade-aud');
-  if (qtyEl) qtyEl.value = '';
-  if (audEl) audEl.value = '';
-  document.getElementById('nav-trade-preview').innerHTML = '<span style="color:var(--subtle);">Enter AUD amount and quantity to see preview</span>';
+  const qtyEl   = document.getElementById('nav-trade-qty');
+  const audEl   = document.getElementById('nav-trade-aud');
+  const priceEl = document.getElementById('nav-trade-price-aud');
+  if (qtyEl)   qtyEl.value   = '';
+  if (audEl)   audEl.value   = '';
+  if (priceEl) priceEl.value = '';
+  document.getElementById('nav-trade-preview').innerHTML = '<span style="color:var(--subtle);">Enter AUD amount, execution price and quantity to see preview</span>';
 
   modal.style.display = 'flex';
 
-  // Live preview — uses currentRefPrice which updates with asset change
+  // Live preview — fee = AUD spent − (qty × execution price)
   const update = () => {
-    const qty = parseFloat(qtyEl?.value) || 0;
-    const aud = parseFloat(audEl?.value) || 0;
-    const prev = document.getElementById('nav-trade-preview');
+    const qty   = parseFloat(qtyEl?.value)   || 0;
+    const aud   = parseFloat(audEl?.value)   || 0;
+    const price = parseFloat(priceEl?.value) || 0;
+    const prev  = document.getElementById('nav-trade-preview');
     if (!prev) return;
     if (qty > 0 && aud > 0) {
-      const effectivePrice = aud / qty;
-      const slip = currentRefPrice ? ((effectivePrice - currentRefPrice) / currentRefPrice * 100) : null;
-      const slipColor = slip === null ? 'var(--subtle)' :
-        Math.abs(slip) < 0.5 ? 'var(--green)' :
-        Math.abs(slip) < 2   ? 'var(--amber)' : 'var(--red)';
+      const effectivePrice = price > 0 ? price : aud / qty;
+      const fee            = price > 0 ? aud - (qty * price) : null;
+      const feeColor       = fee === null ? 'var(--subtle)' :
+        fee < 0   ? 'var(--red)'   :   // negative fee = anomaly
+        fee < 100 ? 'var(--green)' : 'var(--amber)';
       prev.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
           <div>
-            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">Effective Price</div>
-            <div style="font-family:var(--mono);font-weight:600;">$${effectivePrice.toLocaleString('en-AU',{maximumFractionDigits:2})} AUD</div>
+            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">Execution Price</div>
+            <div style="font-family:var(--mono);font-weight:600;">$${effectivePrice.toLocaleString('en-AU',{maximumFractionDigits:2})}</div>
           </div>
           <div>
-            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">Total AUD</div>
+            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">AUD Total</div>
             <div style="font-family:var(--mono);font-weight:600;">${navFmt$(aud)}</div>
           </div>
-          ${slip !== null ? `
+          ${fee !== null ? `
           <div style="grid-column:span 2;">
-            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">Slippage vs month-open</div>
-            <div style="font-family:var(--mono);font-weight:600;color:${slipColor};">${slip>=0?'+':''}${slip.toFixed(3)}%</div>
+            <div style="font-size:9px;color:var(--subtle);margin-bottom:2px;">Fees / Spread (AUD spent − qty × price)</div>
+            <div style="font-family:var(--mono);font-weight:600;color:${feeColor};">${navFmt$(fee)}</div>
           </div>` : ''}
         </div>`;
     } else {
-      prev.innerHTML = '<span style="color:var(--subtle);">Enter AUD amount and quantity to see preview</span>';
+      prev.innerHTML = '<span style="color:var(--subtle);">Enter AUD amount, execution price and quantity to see preview</span>';
     }
   };
-  if (qtyEl) qtyEl.oninput = update;
-  if (audEl) audEl.oninput = update;
+  if (qtyEl)   qtyEl.oninput   = update;
+  if (audEl)   audEl.oninput   = update;
+  if (priceEl) priceEl.oninput = update;
 }
 
 function navCloseTradeModal() {
