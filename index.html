@@ -1820,15 +1820,15 @@ select.ctrl-sel:focus { outline: none; border-color: var(--blue); }
 
         <div style="border-top:1px solid var(--border);padding-top:9px;margin-top:2px;">
           <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;">
-            <span style="font-size:10px;color:var(--muted);flex:none;">⚡ Optimise:</span>
+            <span style="font-size:10px;color:var(--muted);flex:none;">⚡ Auto-optimise on run:</span>
             <select id="opt-obj" class="ctrl-sel" style="flex:1;">
+              <option value="">Off</option>
               <option value="sharpe">Max Sharpe</option>
               <option value="cagr">Max CAGR</option>
               <option value="calmar">Max Calmar</option>
               <option value="sortino">Max Sortino</option>
               <option value="turnover">Min Churn</option>
             </select>
-            <button id="opt-btn" onclick="runOptimise()" style="font-size:10px;background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue);padding:3px 8px;border-radius:var(--r-sm);cursor:pointer;font-family:var(--sans);font-weight:600;white-space:nowrap;">Go</button>
           </div>
           <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;">
             <span style="font-size:10px;color:var(--muted);flex:none;">Min Sharpe ≥</span>
