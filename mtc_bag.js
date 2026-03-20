@@ -750,23 +750,26 @@ async function navFetchPrices() {
   const btn       = document.getElementById('nav-price-btn');
   const updatedEl = document.getElementById('nav-kpi-updated');
   if (btn) { btn.textContent = '↻ Fetching…'; btn.disabled = true; }
-  const allAssets = window.RAW ? window.RAW.assets.map(a => a.asset) : [];
+
   let result;
   try {
-    const r = await fetch(_api() + '/prices?assets=' + allAssets.join(','));
+    // BAG Fund only needs Bitcoin and PAX Gold
+    const r = await fetch(_api() + '/prices?assets=Bitcoin,PAX Gold');
     result  = await r.json();
     if (result.prices && Object.keys(result.prices).length) {
       const d = navLoad();
       if (!d.prices) d.prices = {};
       Object.assign(d.prices, result.prices);
       d.lastFetched = new Date().toISOString();
+      // Store AUD/USD rate if available
+      if (result.audUsd) d.audUsd = result.audUsd;
       navSave(d);
     }
   } catch(e) { console.error('Price fetch error:', e.message); }
-  if (result && result.prices && Object.keys(result.prices).length) {
-    await dbSavePrices(result.prices);
-  }
+
+  if (result?.prices) await dbSavePrices(result.prices);
   if (btn) { btn.textContent = '↻ Prices'; btn.disabled = false; }
+  if (updatedEl) updatedEl.textContent = new Date().toLocaleTimeString();
   renderNavDashboard();
   renderBagOverview();
   checkDriftAlert();
@@ -780,59 +783,60 @@ function renderBagOverview() {
   const positions = computePositions(data.trades);
   const prices    = data.prices || {};
 
-  // Compute current portfolio values
-  let totalValue = 0, totalCost = 0;
-  Object.keys(positions).forEach(asset => {
-    const p  = positions[asset];
-    const cp = prices[asset] ? prices[asset].price : p.costBasis;
-    totalValue += p.qty * cp;
-    totalCost  += p.qty * p.costBasis;
-  });
-  const totalPnl = totalValue - totalCost;
-  const totalRet = totalCost > 0 ? totalPnl / totalCost : 0;
+  // Use AUD prices — live first, then month-open fallback
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  const snapshots    = (_marcDB.cache.bagSnapshots || []).sort((a,b) => b.month.localeCompare(a.month));
+  const snap         = snapshots[0]; // most recent
+  const btcPriceAUD  = prices['Bitcoin']?.priceAUD  || prices['Bitcoin']?.price  || snap?.btc_price_aud  || 0;
+  const goldPriceAUD = prices['PAX Gold']?.priceAUD || prices['PAX Gold']?.price || snap?.gold_price_aud || 0;
 
-  // Latest history
-  const latest    = bagLatestHistory();
-  const signal    = bagCurrentSignal();
+  const btcQty   = positions['Bitcoin']?.qty   || 0;
+  const goldQty  = positions['PAX Gold']?.qty  || 0;
+  const totalValue = btcQty*btcPriceAUD + goldQty*goldPriceAUD;
+  const totalCost  = (positions['Bitcoin']?.totalAUDSpent || 0) + (positions['PAX Gold']?.totalAUDSpent || 0);
+  const totalPnl   = totalValue - totalCost;
 
-  // Model drift
-  const modelW = {'Bitcoin': signal.btcWeight, 'PAX Gold': signal.goldWeight};
-  let drift = 0;
-  if (totalValue > 0) {
-    Object.entries(modelW).forEach(([asset, mw]) => {
-      const p      = positions[asset];
-      const cp     = p ? (prices[asset] ? prices[asset].price : p.costBasis) : 0;
-      const actual = p ? p.qty * cp / totalValue : 0;
-      drift       += Math.abs(actual - mw);
-    });
-  }
+  // Official NAV per unit — BC confirmed if available, else estimated
+  const latestSnap    = snapshots.find(s => s.bc_nav_per_unit || s.nav_per_unit_est);
+  const navPerUnit    = latestSnap
+    ? parseFloat(latestSnap.bc_nav_per_unit || latestSnap.nav_per_unit_est)
+    : 1;
+  const isBC          = !!(latestSnap?.bc_nav_per_unit);
 
-  // NAV per unit
-  const unitsIssued = 1; // simplification for v1 — unit tracking in Phase 2
-  const navPerUnit  = latest.navPerUnit || 1;
+  // Target weights from strategy
+  const stratSnap    = snapshots.find(s => s.target_btc_weight);
+  const targetBtc    = stratSnap?.target_btc_weight || 0;
+  const targetGold   = stratSnap?.target_gold_weight || 0;
 
-  // Update topbar KPIs
+  // Drift vs target
+  const btcActual   = totalValue > 0 ? btcQty*btcPriceAUD/totalValue : 0;
+  const goldActual  = totalValue > 0 ? goldQty*goldPriceAUD/totalValue : 0;
+  const drift       = Math.abs(btcActual - targetBtc) + Math.abs(goldActual - targetGold);
+
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   const cls = (id, c) => { const el = document.getElementById(id); if (el) el.className = 'kpi-v ' + c; };
-  set('bag-kpi-nav',  totalValue > 0 ? navFmt$(totalValue) : navFmt$(BAG_PARAMS.inceptionNAV));
-  set('bag-kpi-unit', navPerUnit.toFixed(4));
-  set('bag-kpi-unit-sub', navPct(navPerUnit - 1, 2) + ' since inception');
 
-  // vs BTC
-  const btcInception = BAG_HISTORY[BAG_HISTORY.findIndex(r => r.date === '2025-12')]?.btcPrice || 131200;
-  const btcNow = prices['Bitcoin']?.price || latest.btcPrice;
-  const vsBtc  = (btcNow / btcInception) - navPerUnit;
-  set('bag-kpi-vsbtc', navPct(navPerUnit - 1 - (btcNow/btcInception - 1), 1));
+  set('bag-kpi-nav',  totalValue > 0 ? navFmt$(totalValue) : '—');
+  set('bag-kpi-unit', '$' + navPerUnit.toFixed(4) + (isBC ? ' ✓' : ' est'));
+
+  // Since inception return — based on navPerUnit starting at $1.00
+  const sinceInception = navPerUnit - 1;
+  set('bag-kpi-unit-sub', navPct(sinceInception, 2) + ' since inception');
+
+  // vs BTC and Gold (AUD)
+  const inceptionSnap = [...snapshots].reverse().find(s => s.btc_price_aud);
+  const btcInception  = inceptionSnap ? parseFloat(inceptionSnap.btc_price_aud)  : 131200;
+  const goldInception = inceptionSnap ? parseFloat(inceptionSnap.gold_price_aud) : 6492;
+  const btcReturn     = btcPriceAUD  > 0 ? btcPriceAUD/btcInception   - 1 : 0;
+  const goldReturn    = goldPriceAUD > 0 ? goldPriceAUD/goldInception - 1 : 0;
+  const vsBtc   = sinceInception - btcReturn;
+  const vsGold  = sinceInception - goldReturn;
+  set('bag-kpi-vsbtc', navPct(vsBtc, 1));
   cls('bag-kpi-vsbtc', vsBtc >= 0 ? 'g' : 'r');
-  set('bag-kpi-vsbtc-sub', vsBtc >= 0 ? 'outperforming' : 'underperforming');
-
-  // vs Gold
-  const goldInception = BAG_HISTORY[BAG_HISTORY.findIndex(r => r.date === '2025-12')]?.goldPrice || 6492;
-  const goldNow  = prices['PAX Gold']?.price || latest.goldPrice;
-  const vsGold   = navPerUnit - 1 - (goldNow/goldInception - 1);
+  set('bag-kpi-vsbtc-sub', vsBtc >= 0 ? 'outperforming BTC' : 'underperforming BTC');
   set('bag-kpi-vsgold', navPct(vsGold, 1));
   cls('bag-kpi-vsgold', vsGold >= 0 ? 'g' : 'r');
-  set('bag-kpi-vsgold-sub', vsGold >= 0 ? 'outperforming' : 'underperforming');
+  set('bag-kpi-vsgold-sub', vsGold >= 0 ? 'outperforming Gold' : 'underperforming Gold');
 
   // Drift
   const driftPct = (drift * 100).toFixed(1) + '%';
@@ -841,10 +845,10 @@ function renderBagOverview() {
   set('bag-kpi-drift-sub', drift > 0.05 ? '⚠ rebalance due' : 'within tolerance');
 
   // Last rebalance
-  const lastTrade = data.trades.sort((a, b) => b.ts - a.ts)[0];
+  const lastTrade = [...data.trades].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
   if (lastTrade) {
-    set('bag-kpi-rebal', lastTrade.date.slice(0,7));
-    const days = Math.floor((Date.now() - lastTrade.ts) / 86400000);
+    set('bag-kpi-rebal', lastTrade.date?.slice(0,7) || '—');
+    const days = Math.floor((Date.now() - new Date(lastTrade.date)) / 86400000);
     set('bag-kpi-rebal-sub', days + ' days ago');
   } else {
     set('bag-kpi-rebal', 'None');
@@ -855,12 +859,13 @@ function renderBagOverview() {
   const grid = document.getElementById('bag-overview-grid');
   if (!grid) return;
 
-  // Build NAV per unit history for sparkline
-  const histRows = BAG_HISTORY.filter(r => r.navPerUnit !== null && r.date >= '2025-12');
-  const navSeries = histRows.map(r => r.navPerUnit);
-  const dateSeries = histRows.map(r => r.date);
-  const minNPU = Math.min(...navSeries) * 0.995;
-  const maxNPU = Math.max(...navSeries) * 1.005;
+  // NAV per unit history from snapshots for sparkline
+  const navSeries  = snapshots.filter(s => s.bc_nav_per_unit || s.nav_per_unit_est)
+    .map(s => parseFloat(s.bc_nav_per_unit || s.nav_per_unit_est)).reverse();
+  const dateSeries = snapshots.filter(s => s.bc_nav_per_unit || s.nav_per_unit_est)
+    .map(s => s.month).reverse();
+  const minNPU = navSeries.length ? Math.min(...navSeries) * 0.995 : 0.99;
+  const maxNPU = navSeries.length ? Math.max(...navSeries) * 1.005 : 1.05;
 
   grid.innerHTML = `
     <!-- Holdings card -->
@@ -1302,32 +1307,31 @@ function renderNavDashboard() {
   const data      = navLoad();
   const positions = computePositions(data.trades);
   const prices    = data.prices || {};
-  const modelW    = getModelWeights();
 
-  let totalValue=0, totalCost=0;
-  Object.keys(positions).forEach(asset => {
-    const p  = positions[asset];
-    const cp = prices[asset] ? prices[asset].price : p.costBasis;
-    totalValue += p.qty * cp;
-    totalCost  += p.qty * p.costBasis;
-  });
-  const totalPnl = totalValue - totalCost;
-  const totalRet = totalCost > 0 ? totalPnl / totalCost : 0;
-  const n        = Object.keys(positions).length;
+  // Use AUD prices from live fetch, fall back to month-open locked prices
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  const snap         = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+  const btcPriceAUD  = prices['Bitcoin']?.priceAUD  || prices['Bitcoin']?.price  || snap?.btc_price_aud  || 0;
+  const goldPriceAUD = prices['PAX Gold']?.priceAUD || prices['PAX Gold']?.price || snap?.gold_price_aud || 0;
 
-  // Drift
-  let drift = 0;
-  if (totalValue > 0) {
-    Object.keys(modelW).forEach(a => {
-      const p      = positions[a];
-      const cp     = p ? (prices[a] ? prices[a].price : p.costBasis) : 0;
-      const actual = p ? p.qty*cp/totalValue : 0;
-      drift       += Math.abs(actual - modelW[a].weight);
-    });
-  }
+  // Get target weights from strategy
+  const targetBtc  = snap?.target_btc_weight  || 0;
+  const targetGold = snap?.target_gold_weight || 0;
 
-  // MTD / YTD
-  const metrics = computePerformanceMetrics(data.trades, prices);
+  // Portfolio value in AUD
+  const btcQty   = positions['Bitcoin']?.qty   || 0;
+  const goldQty  = positions['PAX Gold']?.qty  || 0;
+  const btcVal   = btcQty  * btcPriceAUD;
+  const goldVal  = goldQty * goldPriceAUD;
+  const totalValue = btcVal + goldVal;
+  const totalCost  = (positions['Bitcoin']?.totalAUDSpent || 0) + (positions['PAX Gold']?.totalAUDSpent || 0);
+  const totalPnl   = totalValue - totalCost;
+  const totalRet   = totalCost > 0 ? totalPnl / totalCost : 0;
+
+  // Drift vs target
+  const btcActual  = totalValue > 0 ? btcVal  / totalValue : 0;
+  const goldActual = totalValue > 0 ? goldVal / totalValue : 0;
+  const drift      = Math.abs(btcActual - targetBtc) + Math.abs(goldActual - targetGold);
 
   // Set KPIs
   const setKpi = (id, val, cls) => {
@@ -1335,162 +1339,142 @@ function renderNavDashboard() {
     el.textContent = val;
     if (cls) el.className = 'ts-v ' + cls;
   };
-  setKpi('nav-kpi-nav',     n ? navFmt$(totalValue) : '—', 'b');
-  setKpi('nav-kpi-pnl',     totalCost>0 ? (totalPnl>=0?'+':'')+navFmt$(totalPnl) : '—', totalPnl>=0?'g':'r');
-  setKpi('nav-kpi-ret',     totalCost>0 ? navPct(totalRet) : '—', totalRet>=0?'g':'r');
-  setKpi('nav-kpi-drift',   n&&Object.keys(modelW).length ? (drift*100).toFixed(0)+'% drift' : '—', drift>0.15?'r':drift>0.08?'a':'g');
-  setKpi('nav-kpi-pos',     n + ' position' + (n!==1?'s':''), 'b');
+  setKpi('nav-kpi-nav',     totalValue > 0 ? navFmt$(totalValue) : '—', 'b');
+  setKpi('nav-kpi-pnl',     totalCost  > 0 ? (totalPnl>=0?'+':'')+navFmt$(totalPnl) : '—', totalPnl>=0?'g':'r');
+  setKpi('nav-kpi-ret',     totalCost  > 0 ? navPct(totalRet) : '—', totalRet>=0?'g':'r');
+  setKpi('nav-kpi-drift',   targetBtc > 0 ? (drift*100).toFixed(1)+'%' : '—', drift>0.10?'r':drift>0.05?'a':'g');
   setKpi('nav-kpi-updated', data.lastFetched ? new Date(data.lastFetched).toLocaleTimeString() : 'Manual');
+
+  // MTD / YTD using AUD prices
+  const metrics = computePerformanceMetrics(data.trades, prices);
   if (metrics.mtd) setKpi('nav-kpi-mtd', navPct(metrics.mtd.pct), metrics.mtd.pct>=0?'g':'r');
   if (metrics.ytd) setKpi('nav-kpi-ytd', navPct(metrics.ytd.pct), metrics.ytd.pct>=0?'g':'r');
 
-  // Render regime panel + asset table + charts + ticker
-  renderNavRegimePanel();
-  renderAllAssetTable(positions, prices, modelW, totalValue);
-  renderNavCharts(positions, prices, modelW, totalValue);
-  renderPriceTicker();
+  // Target weights panel
+  renderNavTargetWeights();
+
+  // Holdings table
+  renderAllAssetTable(positions, prices, {btcPriceAUD, goldPriceAUD, btcVal, goldVal, totalValue, targetBtc, targetGold});
+
+  // Charts
+  renderNavCharts(positions, prices, {btcPriceAUD, goldPriceAUD, btcVal, goldVal, totalValue, btcQty, goldQty, totalCost, targetBtc, targetGold});
+
+  // Trade log
   renderNavTradeLog(data.trades);
   const countEl = document.getElementById('nav-tradelog-count');
   if (countEl) countEl.textContent = data.trades.length + ' trade' + (data.trades.length!==1?'s':'');
+
+  // Agent context
+  renderNavAgentContext();
 }
 
-function renderNavCharts(positions, prices, modelW, totalValue) {
+function renderNavCharts(positions, prices, d) {
   const CFG  = {displayModeBar:false, responsive:true};
   const base = {
     paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
-    font:{family:"'DM Mono',monospace",size:9,color:'#6B6F8E'},
+    font:{family:"'DM Mono',monospace", size:9, color:'#6B6F8E'},
     margin:{l:4,r:4,t:4,b:4}, showlegend:false, height:160
   };
-  const TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00C97A'};
 
-  const held = Object.entries(positions)
-    .map(([asset, p]) => {
-      const cp    = prices[asset] ? prices[asset].price : p.costBasis;
-      const value = p.qty * cp;
-      const ao    = window.RAW.assets.find(a => a.asset === asset);
-      return {asset, value, type: ao?.type || 'Equity'};
-    })
-    .filter(r => r.value > 0)
-    .sort((a, b) => b.value - a.value);
+  const assets = ['Bitcoin','PAX Gold'];
+  const values = [d.btcVal, d.goldVal].filter(v => v > 0);
+  const labels = assets.filter((_, i) => [d.btcVal, d.goldVal][i] > 0);
+  const colors = ['#FFB020','#00C97A'];
 
   // Allocation donut
-  if (held.length && document.getElementById('nav-chart-alloc')) {
+  if (values.length && document.getElementById('nav-chart-alloc')) {
     Plotly.react('nav-chart-alloc', [{
-      labels:  held.map(r => r.asset),
-      values:  held.map(r => +r.value.toFixed(2)),
-      type:    'pie', hole: 0.52,
-      marker:  {colors: held.map(r => TC[r.type]||'#888'), line:{color:'#0B0D14',width:1}},
+      labels, values, type:'pie', hole:0.52,
+      marker:{colors: labels.map(l => l==='Bitcoin'?'#FFB020':'#00C97A'), line:{color:'#0B0D14',width:1}},
       textfont:{size:9,color:'#E8E9F0'}, textinfo:'label+percent',
-      hovertemplate:'%{label}: $%{value:,.0f}<extra></extra>'
+      hovertemplate:'%{label}: $%{value:,.0f} AUD<extra></extra>'
     }], {...base, margin:{l:4,r:4,t:4,b:4}}, CFG);
   }
 
-  // Actual vs model
-  const cRows = Object.entries(modelW)
-    .map(([asset, mh]) => {
-      const p      = positions[asset];
-      const cp     = p ? (prices[asset] ? prices[asset].price : p.costBasis) : 0;
-      const actual = p && totalValue > 0 ? p.qty*cp/totalValue : 0;
-      return {asset, actual, mw: mh.weight};
-    })
-    .sort((a, b) => b.mw - a.mw)
-    .slice(0, 14);
-
-  if (cRows.length && document.getElementById('nav-chart-compare')) {
+  // Actual vs target
+  if (d.totalValue > 0 && document.getElementById('nav-chart-compare')) {
+    const btcActual  = d.btcVal  / d.totalValue * 100;
+    const goldActual = d.goldVal / d.totalValue * 100;
     Plotly.react('nav-chart-compare', [
-      {y:cRows.map(r=>r.asset), x:cRows.map(r=>+(r.actual*100).toFixed(1)), name:'Actual', type:'bar', orientation:'h', marker:{color:'#4D9FFF',opacity:0.85}, hovertemplate:'%{y}: %{x:.1f}%<extra>Actual</extra>'},
-      {y:cRows.map(r=>r.asset), x:cRows.map(r=>+(r.mw*100).toFixed(1)),    name:'Model',  type:'bar', orientation:'h', marker:{color:'#00C97A',opacity:0.5},  hovertemplate:'%{y}: %{x:.1f}%<extra>Model</extra>'}
+      {y:['Bitcoin','PAX Gold'], x:[+btcActual.toFixed(1),+goldActual.toFixed(1)],  name:'Actual', type:'bar', orientation:'h', marker:{color:'#4D9FFF',opacity:0.85}, hovertemplate:'%{y}: %{x:.1f}%<extra>Actual</extra>'},
+      {y:['Bitcoin','PAX Gold'], x:[+(d.targetBtc*100).toFixed(1),+(d.targetGold*100).toFixed(1)], name:'Target', type:'bar', orientation:'h', marker:{color:'#00C97A',opacity:0.5},  hovertemplate:'%{y}: %{x:.1f}%<extra>Target</extra>'}
     ], {...base, barmode:'overlay', showlegend:true, margin:{l:72,r:8,t:4,b:20},
         xaxis:{gridcolor:'#1C1F2E',ticksuffix:'%',tickfont:{size:8}},
-        yaxis:{tickfont:{size:8},automargin:true},
+        yaxis:{tickfont:{size:8}},
         legend:{x:0.6,y:1.05,bgcolor:'rgba(0,0,0,0)',font:{size:8}}}, CFG);
   }
 
-  // P&L chart
-  const pRows = held
-    .map(r => {
-      const p    = positions[r.asset];
-      const cp   = prices[r.asset] ? prices[r.asset].price : p.costBasis;
-      const cost = p.qty * p.costBasis;
-      return {asset: r.asset, pnl: r.value - cost};
-    })
-    .sort((a, b) => b.pnl - a.pnl);
-
-  if (pRows.length && document.getElementById('nav-chart-pnl')) {
+  // P&L
+  const btcPnl  = d.btcVal  - (positions['Bitcoin']?.totalAUDSpent  || 0);
+  const goldPnl = d.goldVal - (positions['PAX Gold']?.totalAUDSpent || 0);
+  if (document.getElementById('nav-chart-pnl')) {
     Plotly.react('nav-chart-pnl', [{
-      y: pRows.map(r => r.asset),
-      x: pRows.map(r => +r.pnl.toFixed(2)),
+      y:['Bitcoin','PAX Gold'],
+      x:[+btcPnl.toFixed(2), +goldPnl.toFixed(2)],
       type:'bar', orientation:'h',
-      marker:{color: pRows.map(r => r.pnl>=0?'#00C97A':'#FF4D6D'), opacity:0.85},
+      marker:{color:['Bitcoin','PAX Gold'].map((_, i) => [btcPnl,goldPnl][i]>=0?'#00C97A':'#FF4D6D'), opacity:0.85},
       hovertemplate:'%{y}: $%{x:,.2f}<extra></extra>'
     }], {...base, margin:{l:72,r:8,t:4,b:20},
          xaxis:{gridcolor:'#1C1F2E',tickprefix:'$',tickfont:{size:8},zeroline:true,zerolinecolor:'#252840'},
-         yaxis:{tickfont:{size:8},automargin:true}}, CFG);
+         yaxis:{tickfont:{size:8}}}, CFG);
   }
 }
 
-function renderAllAssetTable(positions, prices, modelWeights, totalValue) {
+function renderAllAssetTable(positions, prices, d) {
   const tbody = document.getElementById('nav-holdings-tbody');
   if (!tbody) return;
-
-  // BAG Fund only trades Bitcoin and PAX Gold
-  const BAG_ASSETS = ['Bitcoin', 'PAX Gold'];
-  const TC = {Equity:'#4D9FFF',ETF:'#A78BFA',Crypto:'#FFB020',Commodity:'#00C97A'};
-
-  const rows = BAG_ASSETS.map(assetName => {
-    const ao = window.RAW.assets.find(a => a.asset === assetName);
-    const p  = positions[assetName];
-    const pd = prices[assetName];
-    const mh = modelWeights[assetName];
-    const cp = pd ? pd.price : (p ? p.costBasis : null);
-    const c24 = pd ? pd.change24h : null;
-    const value = p && cp ? p.qty * cp : 0;
-    const cost  = p ? p.qty * p.costBasis : 0;
-    const pnl   = value - cost;
-    const pnlPct   = cost > 0 ? pnl/cost : 0;
-    const actualPct = totalValue > 0 && p ? value/totalValue : 0;
-    const mw        = mh ? mh.weight : 0;
-    const delta     = actualPct - mw;
-    const hasPos    = p && p.qty > 0.000001;
-    const hasLive   = !!pd;
-    const type      = ao ? ao.type : 'Crypto';
-    const tc        = TC[type] || '#888';
-    const dc        = Math.abs(delta)<0.02?'var(--green)':Math.abs(delta)<0.05?'var(--amber)':'var(--red)';
-    const pc        = pnl>=0?'var(--green)':'var(--red)';
-    const cc        = c24!=null?(c24>=0?'var(--green)':'var(--red)'):'var(--subtle)';
-
+  const assetColors = {'Bitcoin':'#FFB020','PAX Gold':'#00C97A'};
+  const rows = ['Bitcoin','PAX Gold'].map(asset => {
+    const p       = positions[asset];
+    const pd      = prices[asset];
+    const liveP   = pd?.priceAUD || pd?.price;
+    const c24     = pd?.change24h;
+    const qty     = p?.qty || 0;
+    const avgCost = p?.avgCostAUD || 0;
+    const value   = qty * (liveP || avgCost);
+    const cost    = p?.totalAUDSpent || 0;
+    const pnl     = value - cost;
+    const pnlPct  = cost > 0 ? pnl/cost : 0;
+    const actual  = d.totalValue > 0 && qty > 0 ? value/d.totalValue : 0;
+    const target  = asset==='Bitcoin' ? d.targetBtc : d.targetGold;
+    const drift   = actual - target;
+    const hasPos  = qty > 0.000001;
+    const col     = assetColors[asset];
+    const dc      = Math.abs(drift)<0.02?'var(--green)':Math.abs(drift)<0.05?'var(--amber)':'var(--red)';
+    const pc      = pnl>=0?'var(--green)':'var(--red)';
+    const cc      = c24!=null?(c24>=0?'var(--green)':'var(--red)'):'var(--subtle)';
     return `<tr style="border-bottom:1px solid var(--border);"
-      onmouseover="this.style.background='var(--surface2)'"
-      onmouseout="this.style.background=''">
-      <td style="padding:8px 10px;">
-        <span style="font-weight:700;font-size:12px;">${assetName}</span>
-        <span class="badge badge-${type}" style="margin-left:5px;font-size:8px;">${type.slice(0,3)}</span>
-      </td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted);">${hasPos?navFmtQty(p.qty):'—'}</td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted);">${hasPos?'$'+p.costBasis.toLocaleString('en-AU',{maximumFractionDigits:2}):'—'}</td>
-      <td style="padding:8px 10px;">
-        <div class="live-price">
-          <span class="live-dot ${hasLive?'live':'stale'}"></span>
-          <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${hasLive?'var(--text)':'var(--muted)'};">${cp!=null?'$'+cp.toLocaleString('en-AU',{maximumFractionDigits:2}):'—'}</span>
+      onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+      <td style="padding:8px 12px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="width:8px;height:8px;border-radius:50%;background:${col};"></div>
+          <span style="font-weight:700;font-size:12px;">${asset}</span>
         </div>
       </td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:${cc};">${c24!=null?(c24>=0?'+':'')+c24.toFixed(2)+'%':'—'}</td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:13px;font-weight:600;">${hasPos?navFmt$(value):'—'}</td>
-      <td class="pnl-cell" style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:11px;color:${pc};">
-        ${hasPos?(pnl>=0?'+':'')+navFmt$(pnl)+'<br><span class="pnl-pct">'+(pnlPct>=0?'+':'')+(pnlPct*100).toFixed(1)+'%</span>':'—'}
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted);">${hasPos?navFmtQty(qty):'—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--muted);">${hasPos?'$'+avgCost.toLocaleString('en-AU',{maximumFractionDigits:2}):'—'}</td>
+      <td style="padding:8px 12px;">
+        <div style="display:flex;align-items:center;gap:5px;">
+          <span class="live-dot ${liveP?'live':'stale'}"></span>
+          <span style="font-family:var(--mono);font-size:13px;font-weight:700;">${liveP?'$'+liveP.toLocaleString('en-AU',{maximumFractionDigits:2}):'—'}</span>
+        </div>
       </td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:12px;">${hasPos?(actualPct*100).toFixed(1)+'%':'—'}</td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:12px;color:${tc};">${mw>0?(mw*100).toFixed(1)+'%':'—'}</td>
-      <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-size:12px;font-weight:600;color:${dc};">
-        ${(mw>0||hasPos)?(delta>=0?'+':'')+(delta*100).toFixed(1)+'%':'—'}
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:11px;color:${cc};">${c24!=null?(c24>=0?'+':'')+c24.toFixed(2)+'%':'—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:13px;font-weight:600;">${hasPos?navFmt$(value):'—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:11px;color:${pc};">
+        ${hasPos?(pnl>=0?'+':'')+navFmt$(pnl)+'<br><span style="font-size:9px;">'+(pnlPct>=0?'+':'')+(pnlPct*100).toFixed(1)+'%</span>':'—'}
       </td>
-      <td style="padding:8px 10px;text-align:center;white-space:nowrap;">
-        <button onclick="navOpenTradeModal('${assetName}','buy')" style="font-size:9px;background:var(--green-dim);border:1px solid var(--green-mid);color:var(--green);padding:3px 8px;border-radius:2px;cursor:pointer;margin-right:4px;">Buy</button>
-        ${hasPos?`<button onclick="navOpenTradeModal('${assetName}','sell')" style="font-size:9px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);padding:3px 8px;border-radius:2px;cursor:pointer;">Sell</button>`:''}
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:12px;">${hasPos?(actual*100).toFixed(1)+'%':'—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:12px;color:${col};">${target>0?(target*100).toFixed(1)+'%':'—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-size:12px;font-weight:600;color:${dc};">
+        ${(target>0||hasPos)?(drift>=0?'+':'')+(drift*100).toFixed(1)+'%':'—'}
+      </td>
+      <td style="padding:8px 12px;text-align:center;white-space:nowrap;">
+        <button onclick="navOpenTradeModal('${asset}','buy')" style="font-size:9px;background:var(--green-dim);border:1px solid var(--green-mid);color:var(--green);padding:3px 8px;border-radius:2px;cursor:pointer;margin-right:3px;">Buy</button>
+        ${hasPos?`<button onclick="navOpenTradeModal('${asset}','sell')" style="font-size:9px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);padding:3px 8px;border-radius:2px;cursor:pointer;">Sell</button>`:''}
       </td>
     </tr>`;
   });
-
   tbody.innerHTML = rows.join('');
 }
 
@@ -1519,23 +1503,19 @@ function renderPriceTicker() {
 function renderNavTradeLog(trades) {
   const el = document.getElementById('nav-trade-log');
   if (!el) return;
-  const header = '<div style="padding:5px 12px;border-bottom:1px solid var(--border);background:var(--surface2);position:sticky;top:0;"><span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">Trade Log</span></div>';
-  if (!trades.length) { el.innerHTML = header + '<div style="padding:20px;text-align:center;color:var(--subtle);font-size:10px;font-family:var(--mono);">No trades yet — click + Trade</div>'; return; }
-  const sorted = [...trades].sort((a, b) => b.ts - a.ts);
+  const header = '<div style="padding:5px 12px;border-bottom:1px solid var(--border);background:var(--surface2);position:sticky;top:0;"><span style="font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono);">Recent Trades</span></div>';
+  if (!trades.length) { el.innerHTML = header + '<div style="padding:20px;text-align:center;color:var(--subtle);font-size:10px;font-family:var(--mono);">No trades yet — click + Trade to add</div>'; return; }
+  const sorted = [...trades].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
   el.innerHTML = header + sorted.map(t => {
     const dc = t.direction==='buy'?'var(--green)':'var(--red)';
     const db = t.direction==='buy'?'var(--green-dim)':'var(--red-dim)';
-    return `<div style="padding:7px 12px;border-bottom:1px solid var(--border);">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
-        <span style="font-weight:600;font-size:11px;">${t.asset}</span>
-        <span style="font-family:var(--mono);font-size:9px;padding:1px 6px;border-radius:2px;background:${db};color:${dc};font-weight:700;">${t.direction.toUpperCase()}</span>
-      </div>
-      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);">${navFmtQty(t.qty)} @ $${t.price.toFixed(2)}</div>
-      <div style="display:flex;justify-content:space-between;margin-top:2px;">
-        <span style="font-size:9px;color:var(--subtle);">${t.date}</span>
-        <button onclick="navDeleteTrade('${t.id}')" style="background:none;border:none;color:var(--subtle);cursor:pointer;font-size:10px;padding:0;">✕</button>
-      </div>
-      ${t.notes?`<div style="font-size:9px;color:var(--subtle);margin-top:2px;font-style:italic;">${t.notes}</div>`:''}
+    return `<div style="padding:7px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+      <span style="font-family:var(--mono);font-size:9px;padding:2px 6px;border-radius:2px;background:${db};color:${dc};font-weight:700;flex-shrink:0;">${t.direction.toUpperCase()}</span>
+      <span style="font-weight:600;font-size:11px;flex:1;">${t.asset}</span>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted);">${navFmtQty(t.qty)}</span>
+      <span style="font-family:var(--mono);font-size:10px;">${navFmt$(t.audAmount)}</span>
+      <span style="font-size:9px;color:var(--subtle);">${t.date}</span>
+      <button onclick="navDeleteTrade('${t.id}')" style="background:none;border:none;color:var(--subtle);cursor:pointer;font-size:10px;padding:0;">✕</button>
     </div>`;
   }).join('');
 }
@@ -1553,19 +1533,23 @@ function toggleTradeLog() {
 function renderNavTradeLogDrawer(trades) {
   const body = document.getElementById('nav-tradelog-body');
   if (!body) return;
-  if (!trades.length) { body.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:var(--subtle);font-family:var(--mono);font-size:11px;">No trades recorded yet</td></tr>'; return; }
-  const sorted = [...trades].sort((a, b) => b.ts - a.ts);
+  if (!trades.length) { body.innerHTML = '<tr><td colspan="9" style="padding:30px;text-align:center;color:var(--subtle);font-family:var(--mono);font-size:11px;">No trades recorded yet</td></tr>'; return; }
+  const sorted = [...trades].sort((a, b) => new Date(b.date) - new Date(a.date));
   body.innerHTML = sorted.map(t => {
-    const dc = t.direction==='buy'?'var(--green)':'var(--red)';
-    const db = t.direction==='buy'?'var(--green-dim)':'var(--red-dim)';
-    const ao = window.RAW.assets.find(a => a.asset === t.asset);
+    const dc    = t.direction==='buy'?'var(--green)':'var(--red)';
+    const db    = t.direction==='buy'?'var(--green-dim)':'var(--red-dim)';
+    const price = t.effectivePriceAUD || (t.audAmount && t.qty ? t.audAmount/t.qty : 0);
+    const fee   = t.audAmount && t.qty && t.referencePriceAUD
+      ? t.audAmount - (t.qty * t.referencePriceAUD)
+      : (t.audAmount && price ? t.audAmount - (t.qty * price) : null);
     return `<tr style="border-bottom:1px solid var(--border);" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
-      <td style="padding:6px 12px;font-size:11px;font-weight:600;">${t.asset}${ao?`<span class="badge badge-${ao.type}" style="margin-left:5px;">${ao.type.slice(0,3)}</span>`:''}</td>
-      <td style="padding:6px 12px;"><span style="font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:2px;background:${db};color:${dc};font-weight:700;">${t.direction.toUpperCase()}</span></td>
-      <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;">${navFmtQty(t.qty)}</td>
-      <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;">$${t.price.toFixed(2)}</td>
-      <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;font-weight:600;">${navFmt$(t.qty*t.price)}</td>
       <td style="padding:6px 12px;font-size:10px;color:var(--muted);">${t.date}</td>
+      <td style="padding:6px 12px;font-size:11px;font-weight:600;">${t.asset}</td>
+      <td style="padding:6px 12px;"><span style="font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:2px;background:${db};color:${dc};font-weight:700;">${t.direction.toUpperCase()}</span></td>
+      <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;font-weight:600;">${navFmt$(t.audAmount)}</td>
+      <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;">$${price.toLocaleString('en-AU',{maximumFractionDigits:2})}</td>
+      <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;">${navFmtQty(t.qty)}</td>
+      <td style="padding:6px 12px;font-family:var(--mono);font-size:11px;text-align:right;color:${fee>0?'var(--red)':'var(--muted)'};">${fee!=null?navFmt$(Math.abs(fee)):'—'}</td>
       <td style="padding:6px 12px;font-size:10px;color:var(--subtle);font-style:italic;">${t.notes||'—'}</td>
       <td style="padding:6px 12px;text-align:center;"><button onclick="navDeleteTrade('${t.id}')" style="background:none;border:none;color:var(--subtle);cursor:pointer;font-size:11px;">✕</button></td>
     </tr>`;
@@ -1689,31 +1673,43 @@ function navCloseTradeModal() {
 }
 
 async function navSaveTrade() {
-  const asset     = document.getElementById('nav-trade-asset').value;
-  const dir       = document.getElementById('nav-trade-dir').value;
-  const date      = document.getElementById('nav-trade-date').value;
-  const qty       = parseFloat(document.getElementById('nav-trade-qty')?.value);
-  const audAmount = parseFloat(document.getElementById('nav-trade-aud')?.value);
-  const notes     = document.getElementById('nav-trade-notes').value.trim();
+  const asset        = document.getElementById('nav-trade-asset').value;
+  const dir          = document.getElementById('nav-trade-dir').value;
+  const date         = document.getElementById('nav-trade-date').value;
+  const qty          = parseFloat(document.getElementById('nav-trade-qty')?.value);
+  const audAmount    = parseFloat(document.getElementById('nav-trade-aud')?.value);
+  const execPriceAUD = parseFloat(document.getElementById('nav-trade-price-aud')?.value);
+  const notes        = document.getElementById('nav-trade-notes').value.trim();
 
   if (!asset || !date || !qty || qty<=0 || !audAmount || audAmount<=0) {
-    alert('Please fill in asset, date, quantity and AUD amount.'); return;
+    alert('Please fill in asset, date, AUD amount and quantity.'); return;
   }
+
+  // Fee = AUD spent - (qty × execution price)
+  const feeAUD = !isNaN(execPriceAUD) && execPriceAUD > 0
+    ? audAmount - (qty * execPriceAUD)
+    : null;
+
   const btn = document.querySelector('#nav-trade-modal button[onclick="navSaveTrade()"]');
   if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
   try {
-    await dbSaveTrade({asset, direction:dir, date, audAmount, qty, notes, ts:Date.now()});
+    await dbSaveTrade({
+      asset, direction: dir, date, audAmount, qty,
+      execPriceAUD: !isNaN(execPriceAUD) ? execPriceAUD : null,
+      feeAUD, notes, ts: Date.now()
+    });
     navCloseTradeModal();
     await dbLoadBagSnapshots(_marcDB.activeFund?.id);
     renderNavDashboard();
     renderBagOverview();
     checkDriftAlert();
     if (typeof addAlert === 'function') {
+      const feeStr = feeAUD != null ? ` · fees ${navFmt$(Math.abs(feeAUD))}` : '';
       addAlert('info', 'Trade saved',
-        `${dir==='buy'?'Bought':'Sold'} ${navFmtQty(qty)} ${asset} for ${navFmt$(audAmount)} AUD`);
+        `${dir==='buy'?'Bought':'Sold'} ${navFmtQty(qty)} ${asset} for ${navFmt$(audAmount)} AUD${feeStr}`);
     }
   } catch(e) { alert('Failed to save trade: ' + e.message); }
-  if (btn) { btn.textContent = 'Save'; btn.disabled = false; }
+  if (btn) { btn.textContent = 'Save Trade'; btn.disabled = false; }
 }
 
 async function navDeleteTrade(id) {
@@ -1812,28 +1808,354 @@ Keep responses focused and under 400 words unless asked for detail.`,
   }
 }
 
+// ═══════════════════════════════════════
+// NAV AGENT CONTEXT
+// ═══════════════════════════════════════
+function renderNavAgentContext() {
+  const el = document.getElementById('nav-agent-context-box');
+  if (!el) return;
+  const data      = navLoad();
+  const positions = computePositions(data.trades);
+  const prices    = data.prices || {};
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  const snap      = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+  const btcP      = prices['Bitcoin']?.priceAUD  || snap?.btc_price_aud  || 0;
+  const goldP     = prices['PAX Gold']?.priceAUD || snap?.gold_price_aud || 0;
+  const btcQty    = positions['Bitcoin']?.qty   || 0;
+  const goldQty   = positions['PAX Gold']?.qty  || 0;
+  const totalVal  = btcQty*btcP + goldQty*goldP;
+  const btcWt     = totalVal > 0 ? btcQty*btcP/totalVal : 0;
+  const goldWt    = totalVal > 0 ? goldQty*goldP/totalVal : 0;
+  const lines = [
+    `Month: ${currentMonth}`,
+    `Portfolio NAV: ${navFmt$(totalVal)} AUD`,
+    `BTC: ${navFmtQty(btcQty)} @ ${btcWt>0?(btcWt*100).toFixed(1)+'%':' no position'}`,
+    `PAXG: ${navFmtQty(goldQty)} @ ${goldWt>0?(goldWt*100).toFixed(1)+'%':' no position'}`,
+    snap?.target_btc_weight ? `Target BTC: ${(snap.target_btc_weight*100).toFixed(1)}%` : 'Target: not set',
+    snap?.target_gold_weight ? `Target Gold: ${(snap.target_gold_weight*100).toFixed(1)}%` : '',
+    `Drift: ${Math.abs(btcWt-(snap?.target_btc_weight||0))<0.02?'<2% on target':'rebalance needed'}`,
+    `Trades: ${data.trades.length}`,
+  ].filter(Boolean).join('\n');
+  el.textContent = lines;
+}
+
+// ═══════════════════════════════════════
+// NAV NUMBERS — Monthly Ledger
+// Replaces the NAV Calc spreadsheet
+// ═══════════════════════════════════════
+const BAG_FEES = {
+  mgmtMonthly:  0.00125,  // 0.125%/month
+  bcAdminFlat:  3850,     // AUD flat per month
+  cbCustody:    0.0000333 // 0.0033%/month
+};
+
+function bagCalcNAV(snap, prevSnap) {
+  // Returns computed monthly NAV figures for a snapshot row
+  const btcQty   = parseFloat(snap.btc_qty  || 0);
+  const goldQty  = parseFloat(snap.gold_qty || 0);
+  const btcPrice = parseFloat(snap.btc_price_aud  || 0);
+  const goldPrice= parseFloat(snap.gold_price_aud || 0);
+  const grossNAV = btcQty*btcPrice + goldQty*goldPrice;
+
+  // Fees
+  const feeMgmt     = grossNAV * BAG_FEES.mgmtMonthly;
+  const feeBCAdmin  = BAG_FEES.bcAdminFlat;
+  const feeCustody  = grossNAV * BAG_FEES.cbCustody;
+  const totalFees   = feeMgmt + feeBCAdmin + feeCustody;
+  const netNAV      = grossNAV - totalFees;
+
+  // Units: issued on inflows at PREV month's BC nav/unit
+  const inflows      = parseFloat(snap.inflows_aud  || 0);
+  const outflows     = parseFloat(snap.outflows_aud || 0);
+  const prevBCunit   = prevSnap ? (parseFloat(prevSnap.bc_nav_per_unit || prevSnap.nav_per_unit_est || 1)) : 1;
+  const unitsIn      = inflows  > 0 ? inflows  / prevBCunit : 0;
+  const unitsOut     = outflows > 0 ? outflows / prevBCunit : 0;
+  const prevUnits    = prevSnap ? parseFloat(prevSnap.units_issued || 0) : 0;
+  const totalUnits   = prevUnits + unitsIn - unitsOut;
+  const navPerUnitEst= totalUnits > 0 ? netNAV / totalUnits : 1;
+
+  // Returns (month/month - 1)
+  const prevBCNav    = prevSnap ? parseFloat(prevSnap.bc_nav_per_unit || prevSnap.nav_per_unit_est || 0) : null;
+  const officialUnit = parseFloat(snap.bc_nav_per_unit || 0) || navPerUnitEst;
+  const actualReturn = prevBCNav && prevBCNav > 0 ? (officialUnit / prevBCNav) - 1 : null;
+
+  // Raw return: weighted BTC+Gold return at month-open prices
+  const prevBtcPrice  = prevSnap ? parseFloat(prevSnap.btc_price_aud  || 0) : 0;
+  const prevGoldPrice = prevSnap ? parseFloat(prevSnap.gold_price_aud || 0) : 0;
+  const btcReturn     = prevBtcPrice  > 0 ? (btcPrice  / prevBtcPrice)  - 1 : null;
+  const goldReturn    = prevGoldPrice > 0 ? (goldPrice / prevGoldPrice) - 1 : null;
+  const prevTotalVal  = btcQty*prevBtcPrice + goldQty*prevGoldPrice;
+  const rawReturn     = (btcReturn !== null && goldReturn !== null && prevTotalVal > 0)
+    ? btcReturn  * (btcQty*prevBtcPrice/prevTotalVal)
+    + goldReturn * (goldQty*prevGoldPrice/prevTotalVal)
+    : null;
+
+  return {grossNAV, feeMgmt, feeBCAdmin, feeCustody, totalFees, netNAV,
+          unitsIn, unitsOut, totalUnits, navPerUnitEst,
+          actualReturn, rawReturn, btcReturn, goldReturn, prevBCNav, officialUnit};
+}
+
+function renderBagNavNumbers() {
+  const grid = document.getElementById('bag-navnumbers-grid');
+  if (!grid) return;
+
+  const snapshots = [...(_marcDB.cache.bagSnapshots || [])]
+    .sort((a, b) => a.month.localeCompare(b.month));
+
+  if (!snapshots.length) {
+    grid.innerHTML = `<div style="padding:60px;text-align:center;color:var(--subtle);font-family:var(--mono);">
+      No monthly data yet.<br><br>
+      <button onclick="bagAddNavMonth()" style="padding:8px 20px;background:var(--green);color:#000;border:none;border-radius:var(--r-sm);font-weight:700;cursor:pointer;">+ Add First Month</button>
+    </div>`;
+    return;
+  }
+
+  const thStyle = 'padding:8px 10px;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap;background:var(--surface2);position:sticky;top:0;';
+  const thStyleL = thStyle.replace('text-align:right','text-align:left');
+
+  grid.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:11px;">
+      <thead>
+        <tr>
+          <th style="${thStyleL}">Month</th>
+          <th style="${thStyle}">BTC Price AUD</th>
+          <th style="${thStyle}">PAXG Price AUD</th>
+          <th style="${thStyle}">BTC Qty</th>
+          <th style="${thStyle}">PAXG Qty</th>
+          <th style="${thStyle}">Gross NAV</th>
+          <th style="${thStyle}">Inflows</th>
+          <th style="${thStyle}">Total Fees</th>
+          <th style="${thStyle}">Net NAV Est</th>
+          <th style="${thStyle}">Units Issued</th>
+          <th style="${thStyle}">NAV/Unit Est</th>
+          <th style="${thStyle}" style="color:var(--green);">BC NAV/Unit ✓</th>
+          <th style="${thStyle}">Recon Diff</th>
+          <th style="${thStyle}">Raw Return</th>
+          <th style="${thStyle}">Actual Return</th>
+          <th style="${thStyle}">BTC Return</th>
+          <th style="${thStyle}">Gold Return</th>
+          <th style="${thStyle}">AUD/USD</th>
+          <th style="${thStyle}">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${snapshots.map((snap, i) => {
+          const prev   = i > 0 ? snapshots[i-1] : null;
+          const calc   = bagCalcNAV(snap, prev);
+          const isBCConfirmed = !!snap.bc_nav_per_unit;
+          const officialUnit  = isBCConfirmed ? parseFloat(snap.bc_nav_per_unit) : calc.navPerUnitEst;
+          const reconDiff     = isBCConfirmed && calc.navPerUnitEst > 0
+            ? (parseFloat(snap.bc_nav_per_unit) - calc.navPerUnitEst) / calc.navPerUnitEst
+            : null;
+          const reconFlag     = reconDiff !== null && Math.abs(reconDiff) > 0.001;
+          const fmt$  = v => v != null ? '$'+v.toLocaleString('en-AU',{maximumFractionDigits:0}) : '—';
+          const fmtU  = v => v != null ? '$'+v.toFixed(4) : '—';
+          const fmtPct= v => v != null ? (v>=0?'+':'')+(v*100).toFixed(2)+'%' : '—';
+          const pc    = v => v == null ? 'var(--subtle)' : v >= 0 ? 'var(--green)' : 'var(--red)';
+
+          return `<tr style="border-bottom:1px solid var(--border);" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+            <td style="padding:8px 10px;font-family:var(--mono);font-weight:700;white-space:nowrap;">
+              ${snap.month}
+              ${isBCConfirmed ? '<span style="color:var(--green);font-size:9px;margin-left:4px;">✓ BC</span>' : ''}
+              ${snap.prices_locked ? '' : '<span style="color:var(--amber);font-size:9px;margin-left:2px;">⏳</span>'}
+            </td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.btc_price_aud ? '$'+parseFloat(snap.btc_price_aud).toLocaleString('en-AU',{maximumFractionDigits:0}) : '—'}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.gold_price_aud ? '$'+parseFloat(snap.gold_price_aud).toLocaleString('en-AU',{maximumFractionDigits:2}) : '—'}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.btc_qty ? navFmtQty(parseFloat(snap.btc_qty)) : '—'}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.gold_qty ? navFmtQty(parseFloat(snap.gold_qty)) : '—'}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:600;">${fmt$(calc.grossNAV)}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.inflows_aud ? fmt$(parseFloat(snap.inflows_aud)) : '—'}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:var(--red);">${fmt$(calc.totalFees)}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:600;">${fmt$(calc.netNAV)}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${calc.totalUnits > 0 ? calc.totalUnits.toLocaleString('en-AU',{maximumFractionDigits:2}) : '—'}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${isBCConfirmed?'var(--muted)':'var(--text)'};">${fmtU(calc.navPerUnitEst)}</td>
+            <td style="padding:8px 10px;text-align:right;">
+              <div style="display:flex;align-items:center;justify-content:flex-end;gap:5px;">
+                <span style="font-family:var(--mono);font-weight:700;color:${isBCConfirmed?'var(--green)':'var(--subtle)'};">${isBCConfirmed?fmtU(parseFloat(snap.bc_nav_per_unit)):'—'}</span>
+                <button onclick="bagEditBCNav('${snap.month}','${snap.fund_id}')" style="font-size:9px;background:${isBCConfirmed?'var(--green-dim)':'var(--surface2)'};border:1px solid ${isBCConfirmed?'var(--green-mid)':'var(--border)'};color:${isBCConfirmed?'var(--green)':'var(--muted)'};padding:2px 6px;border-radius:2px;cursor:pointer;">
+                  ${isBCConfirmed?'✎ Edit':'+ Enter'}
+                </button>
+              </div>
+            </td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${reconFlag?'var(--red)':'var(--subtle)'};">${reconDiff!=null?fmtPct(reconDiff):'—'}${reconFlag?' ⚠':''}
+            </td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${pc(calc.rawReturn)};">${fmtPct(calc.rawReturn)}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:600;color:${pc(calc.actualReturn)};">${fmtPct(calc.actualReturn)}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${pc(calc.btcReturn)};">${fmtPct(calc.btcReturn)}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${pc(calc.goldReturn)};">${fmtPct(calc.goldReturn)}</td>
+            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.aud_usd_rate ? parseFloat(snap.aud_usd_rate).toFixed(4) : '—'}</td>
+            <td style="padding:8px 10px;text-align:center;white-space:nowrap;">
+              <button onclick="bagEditNavRow('${snap.month}')" style="font-size:9px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:2px;cursor:pointer;">✎ Edit</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+function bagAddNavMonth() {
+  // Open an edit modal for a new month
+  const nextMonth = (() => {
+    const snaps   = _marcDB.cache.bagSnapshots || [];
+    const months  = snaps.map(s => s.month).sort();
+    const last    = months[months.length - 1];
+    if (!last) return new Date().toISOString().slice(0, 7);
+    const [y, m]  = last.split('-').map(Number);
+    const next    = new Date(y, m, 1); // month is 0-indexed
+    return `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}`;
+  })();
+  bagOpenNavEditModal(nextMonth, null);
+}
+
+function bagEditNavRow(month) {
+  const snap = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
+  bagOpenNavEditModal(month, snap);
+}
+
+function bagEditBCNav(month, fundId) {
+  const snap = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
+  const current = snap?.bc_nav_per_unit || '';
+  const val = prompt(`Enter BC confirmed NAV/unit for ${month}:\n(Leave blank to clear)`, current);
+  if (val === null) return; // cancelled
+  const numVal = val.trim() === '' ? null : parseFloat(val);
+  if (val.trim() !== '' && isNaN(numVal)) { alert('Invalid number'); return; }
+  dbSaveBagSnapshot({
+    month, fund_id: fundId || _marcDB.activeFund?.id,
+    bc_nav_per_unit: numVal,
+    bc_confirmed:    numVal !== null,
+    bc_confirmed_at: numVal !== null ? new Date().toISOString() : null
+  }).then(() => {
+    dbLoadBagSnapshots(_marcDB.activeFund?.id).then(() => {
+      renderBagNavNumbers();
+      renderBagOverview();
+      // Trigger AI reconciliation if diff > 0.1%
+      if (numVal !== null) {
+        const snap2 = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
+        const prev  = (_marcDB.cache.bagSnapshots || [])
+          .filter(s => s.month < month).sort((a,b) => b.month.localeCompare(a.month))[0];
+        const calc  = bagCalcNAV(snap2, prev);
+        const diff  = Math.abs((numVal - calc.navPerUnitEst) / calc.navPerUnitEst);
+        if (diff > 0.001) bagRunReconciliationAI(month, numVal, calc.navPerUnitEst, snap2);
+      }
+    });
+  }).catch(e => alert('Save failed: ' + e.message));
+}
+
+function bagOpenNavEditModal(month, snap) {
+  // Build a simple edit modal
+  const existing = snap || {};
+  const html = `
+    <div style="position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;" id="nav-edit-modal">
+      <div style="background:var(--surface);border:1px solid var(--border2);border-radius:6px;width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 80px rgba(0,0,0,.7);">
+        <div style="padding:13px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--surface);">
+          <h3 style="font-size:13px;font-weight:700;">Edit NAV Numbers — ${month}</h3>
+          <button onclick="document.getElementById('nav-edit-modal').remove()" style="background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;padding:3px 9px;border-radius:2px;font-size:11px;">✕</button>
+        </div>
+        <div style="padding:16px 18px;display:flex;flex-direction:column;gap:10px;">
+          ${[
+            ['Month-Open BTC Price AUD', 'edit-btc-price', existing.btc_price_aud || '', '0.01'],
+            ['Month-Open PAXG Price AUD', 'edit-gold-price', existing.gold_price_aud || '', '0.01'],
+            ['BTC Quantity Held', 'edit-btc-qty', existing.btc_qty || '', 'any'],
+            ['PAXG Quantity Held', 'edit-gold-qty', existing.gold_qty || '', 'any'],
+            ['Inflows AUD', 'edit-inflows', existing.inflows_aud || '', '0.01'],
+            ['Outflows AUD', 'edit-outflows', existing.outflows_aud || '', '0.01'],
+            ['AUD/USD Rate', 'edit-audusd', existing.aud_usd_rate || '', '0.0001'],
+            ['BC Confirmed NAV/Unit', 'edit-bc-nav', existing.bc_nav_per_unit || '', '0.000001'],
+          ].map(([label, id, val, step]) => `
+            <div style="display:grid;grid-template-columns:180px 1fr;gap:8px;align-items:center;">
+              <label style="font-size:11px;color:var(--muted);">${label}</label>
+              <input type="number" id="${id}" value="${val}" step="${step}"
+                style="font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:2px;outline:none;"/>
+            </div>`).join('')}
+        </div>
+        <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;">
+          <button onclick="document.getElementById('nav-edit-modal').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:3px;cursor:pointer;font-size:11px;">Cancel</button>
+          <button onclick="bagSaveNavEdit('${month}')" style="background:var(--green);color:#000;border:none;padding:6px 18px;border-radius:3px;cursor:pointer;font-size:12px;font-weight:700;">Save</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function bagSaveNavEdit(month) {
+  const gv = id => { const el = document.getElementById(id); return el?.value ? parseFloat(el.value) : null; };
+  const bcNav = gv('edit-bc-nav');
+  try {
+    await dbSaveBagSnapshot({
+      month,
+      btc_price_aud:    gv('edit-btc-price'),
+      gold_price_aud:   gv('edit-gold-price'),
+      btc_qty:          gv('edit-btc-qty'),
+      gold_qty:         gv('edit-gold-qty'),
+      inflows_aud:      gv('edit-inflows'),
+      outflows_aud:     gv('edit-outflows'),
+      aud_usd_rate:     gv('edit-audusd'),
+      bc_nav_per_unit:  bcNav,
+      bc_confirmed:     bcNav !== null,
+      bc_confirmed_at:  bcNav !== null ? new Date().toISOString() : null,
+      prices_locked:    !!(gv('edit-btc-price') && gv('edit-gold-price')),
+    });
+    document.getElementById('nav-edit-modal')?.remove();
+    await dbLoadBagSnapshots(_marcDB.activeFund?.id);
+    renderBagNavNumbers();
+    renderBagOverview();
+  } catch(e) { alert('Save failed: ' + e.message); }
+}
+
+async function bagRunReconciliationAI(month, bcUnit, estUnit, snap) {
+  const diff     = ((bcUnit - estUnit) / estUnit * 100).toFixed(3);
+  const prompt   = `You are the CIO of the BAG Fund (Bitcoin And Gold systematic fund).
+Monthly reconciliation alert for ${month}:
+- Estimated NAV/unit: $${estUnit.toFixed(4)}
+- BC Confirmed NAV/unit: $${bcUnit.toFixed(4)}
+- Difference: ${diff}% (threshold: 0.1%)
+- BTC held: ${snap?.btc_qty}, PAXG held: ${snap?.gold_qty}
+- BTC price AUD: ${snap?.btc_price_aud}, PAXG price AUD: ${snap?.gold_price_aud}
+- Inflows: $${snap?.inflows_aud || 0} AUD
+Explain in 2-3 sentences the most likely cause of this discrepancy.`;
+
+  try {
+    const r    = await fetch(_api() + '/ai', {
+      method:  'POST',
+      headers: _authHeaders(),
+      body:    JSON.stringify({
+        model:      'claude-sonnet-4-20250514',
+        max_tokens: 300,
+        messages:   [{role:'user', content: prompt}]
+      })
+    });
+    const d    = await r.json();
+    const text = d.content?.[0]?.text || 'Unable to analyse.';
+    await dbSaveBagSnapshot({month, recon_ai_note: text, recon_flag: true,
+      recon_diff_pct: parseFloat(diff)});
+    await dbLoadBagSnapshots(_marcDB.activeFund?.id);
+    renderBagNavNumbers();
+    if (typeof addAlert === 'function') addAlert('warn', 'Reconciliation flag', `${month}: ${diff}% diff — AI note saved`);
+  } catch(e) { console.warn('Reconciliation AI failed:', e); }
+}
+
+
 function buildAgentPrompt(userMsg) {
   let snapshot = '';
   try {
     const data = navLoad(), positions = computePositions(data.trades), prices = data.prices || {};
-    const mw = getModelWeights();
-    let totalValue = 0;
-    Object.entries(positions).forEach(([asset, p]) => {
-      const cp = prices[asset] ? prices[asset].price : p.costBasis;
-      totalValue += p.qty * cp;
-    });
-    const regimeName = document.getElementById('nav-regime-pill')?.textContent?.trim() || '—';
+    const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+    const snap  = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+    const btcP  = prices['Bitcoin']?.priceAUD  || snap?.btc_price_aud  || 0;
+    const goldP = prices['PAX Gold']?.priceAUD || snap?.gold_price_aud || 0;
+    const btcQty  = positions['Bitcoin']?.qty  || 0;
+    const goldQty = positions['PAX Gold']?.qty || 0;
+    const totalValue = btcQty*btcP + goldQty*goldP;
     const signal = bagCurrentSignal();
+    const btcWt  = totalValue > 0 ? btcQty*btcP/totalValue : 0;
+    const goldWt = totalValue > 0 ? goldQty*goldP/totalValue : 0;
     snapshot = `[BAG FUND CONTEXT — ${new Date().toLocaleString()}]\n`
-      + `Regime: ${regimeName}\n`
-      + `NAV: ${navFmt$(totalValue)} | NAV/unit: ${bagLatestHistory().navPerUnit?.toFixed(4)||'—'}\n`
-      + `BAG Signal: BTC ${(signal.btcWeight*100).toFixed(1)}% | Gold ${(signal.goldWeight*100).toFixed(1)}% | Score: ${signal.btcScore.toFixed(3)}\n`
-      + `Positions: ${Object.entries(positions).filter(([,p])=>p.qty>0).map(([a,p])=>{
-          const cp=prices[a]?prices[a].price:p.costBasis;
-          const pct=totalValue>0?(p.qty*cp/totalValue*100).toFixed(1):'0';
-          const model=mw[a]?(mw[a].weight*100).toFixed(1):'0';
-          return `${a}: ${pct}% actual / ${model}% model`;
-        }).join(', ')}\n\n`;
+      + `Month: ${currentMonth}\n`
+      + `Portfolio NAV: ${navFmt$(totalValue)} AUD\n`
+      + `BTC: ${navFmtQty(btcQty)} @ ${(btcWt*100).toFixed(1)}% actual | ${((snap?.target_btc_weight||0)*100).toFixed(1)}% target\n`
+      + `PAXG: ${navFmtQty(goldQty)} @ ${(goldWt*100).toFixed(1)}% actual | ${((snap?.target_gold_weight||0)*100).toFixed(1)}% target\n`
+      + `Signal: BTC ${(signal.btcWeight*100).toFixed(1)}% | Gold ${(signal.goldWeight*100).toFixed(1)}% | BTC Score: ${signal.btcScore?.toFixed(3)||'—'}\n`
+      + `Trades logged: ${data.trades.length}\n\n`;
   } catch(e) {}
   return snapshot + userMsg;
 }
@@ -1871,19 +2193,28 @@ function checkDriftAlert() {
   const data      = navLoad();
   const positions = computePositions(data.trades);
   const prices    = data.prices || {};
-  const signal    = bagCurrentSignal();
-  let totalValue = 0;
-  Object.keys(positions).forEach(asset => {
-    const p  = positions[asset];
-    const cp = prices[asset] ? prices[asset].price : p.costBasis;
-    totalValue += p.qty * cp;
-  });
-  if (totalValue <= 0) return;
-  const btcActual  = positions['Bitcoin']  ? positions['Bitcoin'].qty  * (prices['Bitcoin']?.price  || positions['Bitcoin'].costBasis)  / totalValue : 0;
-  const goldActual = positions['PAX Gold'] ? positions['PAX Gold'].qty * (prices['PAX Gold']?.price || positions['PAX Gold'].costBasis) / totalValue : 0;
-  const drift = Math.abs(btcActual - signal.btcWeight) + Math.abs(goldActual - signal.goldWeight);
+
+  // Use AUD prices
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  const snap         = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+  const btcPriceAUD  = prices['Bitcoin']?.priceAUD  || snap?.btc_price_aud  || 0;
+  const goldPriceAUD = prices['PAX Gold']?.priceAUD || snap?.gold_price_aud || 0;
+
+  const btcQty   = positions['Bitcoin']?.qty   || 0;
+  const goldQty  = positions['PAX Gold']?.qty  || 0;
+  const totalVal = btcQty*btcPriceAUD + goldQty*goldPriceAUD;
+  if (totalVal <= 0) return;
+
+  // Use saved strategy target weights, fall back to computed signal
+  const targetBtc  = snap?.target_btc_weight  || bagCurrentSignal().btcWeight;
+  const targetGold = snap?.target_gold_weight || bagCurrentSignal().goldWeight;
+  const btcActual  = btcQty*btcPriceAUD/totalVal;
+  const goldActual = goldQty*goldPriceAUD/totalVal;
+  const drift      = Math.abs(btcActual - targetBtc) + Math.abs(goldActual - targetGold);
+
   if (drift > 0.05 && typeof addAlert === 'function') {
-    addAlert('warn', 'Rebalance recommended', `BAG Fund drift is ${(drift*100).toFixed(1)}% — above 5% threshold. Model targets BTC ${(signal.btcWeight*100).toFixed(1)}% / Gold ${(signal.goldWeight*100).toFixed(1)}%.`);
+    addAlert('warn', 'Rebalance recommended',
+      `BAG Fund drift is ${(drift*100).toFixed(1)}% — above 5% threshold. Target: BTC ${(targetBtc*100).toFixed(1)}% / Gold ${(targetGold*100).toFixed(1)}%.`);
   }
 }
 
@@ -1929,24 +2260,369 @@ function renderMarkdown(text) {
 // Override the shell's switchBagTab to also trigger renders
 const _origSwitchBagTab = typeof switchBagTab !== 'undefined' ? switchBagTab : null;
 function switchBagTab(tab) {
-  // Update tab buttons
   document.querySelectorAll('#mode-bag .stab').forEach((t, i) => {
-    const tabs = ['overview','nav','signal','performance','funddata','models'];
+    const tabs = ['overview','nav','navnumbers','performance','strategy','models'];
     t.classList.toggle('active', tabs[i] === tab);
   });
   document.querySelectorAll('#mode-bag .subpage').forEach(p => p.classList.remove('active'));
   const page = document.getElementById('bag-' + tab);
   if (page) page.classList.add('active');
 
-  // Trigger render for each page
   if (tab === 'overview')    renderBagOverview();
-  if (tab === 'nav')         { renderNavRegimePanel(); renderNavDashboard(); }
-  if (tab === 'signal')      renderBagSignal();
+  if (tab === 'nav')         { renderNavDashboard(); renderNavAgentContext(); }
+  if (tab === 'navnumbers')  renderBagNavNumbers();
   if (tab === 'performance') renderBagPerformance();
-  if (tab === 'funddata')    renderBagFundData();
+  if (tab === 'strategy')    renderBagStrategy();
   if (tab === 'models')      renderModelLibrary();
 
   setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+}
+
+// ═══════════════════════════════════════
+// STRATEGY TAB
+// Weight calculator — ISM, MVRV, Fed Rate → BTC/Gold weights
+// Saved per month to Supabase
+// ═══════════════════════════════════════
+function renderBagStrategy() {
+  const grid = document.getElementById('bag-strategy-grid');
+  if (!grid) return;
+
+  // Load saved strategy signals from snapshots
+  const snapshots = (_marcDB.cache.bagSnapshots || [])
+    .filter(s => s.ism != null || s.mvrv != null || s.fed_rate != null)
+    .sort((a, b) => b.month.localeCompare(a.month));
+
+  // Get current month
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+
+  grid.innerHTML = `
+    <!-- Weight Calculator Card -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">⌖ Weight Calculator</span>
+        <span class="card-meta" style="color:var(--amber);">BAG signal engine</span>
+      </div>
+      <div class="card-body">
+        <!-- Month selector -->
+        <div style="margin-bottom:12px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;">Month</div>
+          <input type="month" id="strat-month" value="${currentMonth}"
+            style="font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:var(--r-sm);width:100%;box-sizing:border-box;outline:none;"
+            onchange="stratLoadMonth(this.value)"/>
+        </div>
+
+        <!-- Inputs -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+          ${[
+            ['ISM PMI', 'strat-ism', '52.4', '0.1', 'Manufacturing activity. >50 = expansion, <50 = contraction.'],
+            ['MVRV Z-Score', 'strat-mvrv', '0.48', '0.01', 'BTC on-chain valuation. Low = undervalued = BTC bullish.'],
+            ['Fed Cash Rate', 'strat-fed', '0.0375', '0.0025', 'US Federal Funds Rate as decimal. e.g. 3.75% = 0.0375'],
+            ['Prev Month ISM', 'strat-ism-prev', '52.6', '0.1', 'Prior month ISM for change calculation.'],
+            ['Prev Month Fed', 'strat-fed-prev', '0.0375', '0.0025', 'Prior month Fed rate for change calculation.'],
+            ['Vol 12m BTC', 'strat-vol-btc', '0.364', '0.001', '12-month annualised volatility for BTC.'],
+            ['Vol 12m Gold', 'strat-vol-gold', '0.133', '0.001', '12-month annualised volatility for PAX Gold.'],
+            ['Sortino BTC', 'strat-sortino-btc', '0.345', '0.001', '12-month Sortino ratio for BTC.'],
+            ['Sortino Gold', 'strat-sortino-gold', '0.434', '0.001', '12-month Sortino ratio for PAX Gold.'],
+          ].map(([label, id, placeholder, step, hint]) => `
+            <div>
+              <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:3px;" title="${hint}">${label}</div>
+              <input type="number" id="${id}" placeholder="${placeholder}" step="${step}"
+                style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"
+                oninput="stratPreview()"/>
+            </div>`).join('')}
+        </div>
+
+        <!-- Calculate button -->
+        <button onclick="stratCalculate()"
+          style="width:100%;padding:9px;background:var(--amber);color:#000;border:none;border-radius:var(--r-sm);font-family:var(--sans);font-size:12px;font-weight:700;cursor:pointer;margin-bottom:10px;">
+          ↻ Calculate Weights
+        </button>
+
+        <!-- Result -->
+        <div id="strat-result" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:12px;display:none;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div style="text-align:center;">
+              <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);margin-bottom:4px;">BTC WEIGHT</div>
+              <div style="font-family:var(--mono);font-size:28px;font-weight:600;color:var(--amber);" id="strat-w-btc">—</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);margin-bottom:4px;">GOLD WEIGHT</div>
+              <div style="font-family:var(--mono);font-size:28px;font-weight:600;color:var(--green);" id="strat-w-gold">—</div>
+            </div>
+          </div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1.8;" id="strat-breakdown">—</div>
+          <button onclick="stratSaveMonth()"
+            style="width:100%;margin-top:10px;padding:7px;background:var(--green);color:#000;border:none;border-radius:var(--r-sm);font-size:11px;font-weight:700;cursor:pointer;">
+            ✓ Save for <span id="strat-save-month">${currentMonth}</span>
+          </button>
+          <div id="strat-save-status" style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:5px;text-align:center;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Signal History Card -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">Signal History</span>
+        <span class="card-meta">saved per month</span>
+      </div>
+      <div class="card-body-flush">
+        ${snapshots.length === 0 ? `
+          <div style="padding:40px;text-align:center;color:var(--subtle);font-family:var(--mono);font-size:11px;">
+            No signals saved yet.<br>Calculate weights and save for each month.
+          </div>` : `
+          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead>
+              <tr style="background:var(--surface2);">
+                <th style="padding:7px 12px;text-align:left;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">Month</th>
+                <th style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">ISM</th>
+                <th style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">MVRV</th>
+                <th style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">Fed</th>
+                <th style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">BTC%</th>
+                <th style="padding:7px 12px;text-align:right;font-family:var(--mono);font-size:9px;color:var(--green);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);">Gold%</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${snapshots.map(s => `
+                <tr style="border-bottom:1px solid var(--border);cursor:pointer;" onclick="stratLoadFromHistory('${s.month}')"
+                  onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+                  <td style="padding:7px 12px;font-family:var(--mono);font-weight:600;">${s.month}</td>
+                  <td style="padding:7px 12px;text-align:right;font-family:var(--mono);color:var(--muted);">${s.ism != null ? s.ism.toFixed(1) : '—'}</td>
+                  <td style="padding:7px 12px;text-align:right;font-family:var(--mono);color:var(--muted);">${s.mvrv != null ? s.mvrv.toFixed(3) : '—'}</td>
+                  <td style="padding:7px 12px;text-align:right;font-family:var(--mono);color:var(--muted);">${s.fed_rate != null ? (s.fed_rate*100).toFixed(2)+'%' : '—'}</td>
+                  <td style="padding:7px 12px;text-align:right;font-family:var(--mono);color:var(--amber);font-weight:600;">${s.target_btc_weight != null ? (s.target_btc_weight*100).toFixed(1)+'%' : '—'}</td>
+                  <td style="padding:7px 12px;text-align:right;font-family:var(--mono);color:var(--green);font-weight:600;">${s.target_gold_weight != null ? (s.target_gold_weight*100).toFixed(1)+'%' : '—'}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>`}
+      </div>
+    </div>
+  `;
+
+  // Load current month data if exists
+  const currentSnap = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+  if (currentSnap?.ism != null) {
+    stratLoadFromSnap(currentSnap);
+  }
+}
+
+function stratPreview() {
+  // Auto-calculate on input change
+  stratCalculate(true);
+}
+
+function stratCalculate(silent) {
+  const get = id => { const el = document.getElementById(id); return el ? parseFloat(el.value) : NaN; };
+  const ism      = get('strat-ism');
+  const mvrv     = get('strat-mvrv');
+  const fedRate  = get('strat-fed');
+  const ismPrev  = get('strat-ism-prev');
+  const fedPrev  = get('strat-fed-prev');
+  const volBtc   = get('strat-vol-btc');
+  const volGold  = get('strat-vol-gold');
+  const sortBtc  = get('strat-sortino-btc');
+  const sortGold = get('strat-sortino-gold');
+
+  if ([ism, mvrv, fedRate].some(isNaN)) return;
+
+  const signal = bagComputeSignal({
+    ism, mvrv, fedRate,
+    ismPrev:    isNaN(ismPrev)  ? ism  : ismPrev,
+    fedPrev:    isNaN(fedPrev)  ? fedRate : fedPrev,
+    btcVol12m:  isNaN(volBtc)  ? 0.364 : volBtc,
+    goldVol12m: isNaN(volGold) ? 0.133 : volGold,
+    btcSortino: isNaN(sortBtc) ? 0.345 : sortBtc,
+    goldSortino:isNaN(sortGold)? 0.434 : sortGold,
+  });
+
+  const resultEl = document.getElementById('strat-result');
+  if (resultEl) resultEl.style.display = 'block';
+
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('strat-w-btc',  (signal.btcWeight*100).toFixed(1)+'%');
+  set('strat-w-gold', (signal.goldWeight*100).toFixed(1)+'%');
+
+  const changeFed  = isNaN(fedPrev)  ? 0 : (fedRate-fedPrev)/Math.max(fedPrev,0.001);
+  const changeISM  = isNaN(ismPrev)  ? 0 : ism - ismPrev;
+  const cashScore  = 1/3 - changeFed*(4/3);
+  const mvrvScore  = Math.min(1, Math.max(0, (4.5-mvrv)/3.5));
+  const ismScore   = Math.max(0, (ism-50)/10);
+  const btcScore   = 0.5*ismScore + 0.2*cashScore + 0.3*mvrvScore;
+
+  set('strat-breakdown', [
+    `BTC Score: ${btcScore.toFixed(4)} (ISM ${ismScore.toFixed(4)} × 0.5 + Cash ${cashScore.toFixed(4)} × 0.2 + MVRV ${mvrvScore.toFixed(4)} × 0.3)`,
+    `Inv-Vol BTC: ${signal.btcVolWeight.toFixed(4)} | Inv-Vol Gold: ${signal.goldVolWeight.toFixed(4)}`,
+    `Factor blend: ${BAG_PARAMS.factorVolBlend*100}% factor + ${(1-BAG_PARAMS.factorVolBlend)*100}% vol`,
+  ].join('\n'));
+
+  // Store for save
+  window._stratLastSignal = signal;
+  window._stratLastInputs = { ism, mvrv, fedRate, ismPrev, fedPrev, volBtc, volGold, sortBtc, sortGold, btcScore };
+}
+
+async function stratSaveMonth() {
+  if (!window._stratLastSignal) { alert('Calculate weights first.'); return; }
+  const monthEl = document.getElementById('strat-month');
+  const month   = monthEl?.value || _marcDB.currentMonth;
+  const sig     = window._stratLastSignal;
+  const inp     = window._stratLastInputs;
+  const statusEl = document.getElementById('strat-save-status');
+  if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--muted)'; }
+
+  try {
+    await dbSaveBagSnapshot({
+      month,
+      ism:               inp.ism,
+      mvrv:              inp.mvrv,
+      fed_rate:          inp.fedRate,
+      ism_prev:          inp.ismPrev,
+      fed_prev:          inp.fedPrev,
+      vol12m_btc:        inp.volBtc,
+      vol12m_gold:       inp.volGold,
+      sortino_btc:       inp.sortBtc,
+      sortino_gold:      inp.sortGold,
+      btc_score:         inp.btcScore,
+      target_btc_weight: sig.btcWeight,
+      target_gold_weight:sig.goldWeight,
+    });
+
+    if (statusEl) { statusEl.textContent = '✓ Saved for ' + month; statusEl.style.color = 'var(--green)'; }
+
+    // Refresh snapshots cache
+    await dbLoadBagSnapshots(_marcDB.activeFund?.id);
+
+    // Update NAV Holdings target weights display
+    renderNavTargetWeights();
+
+    if (typeof addAlert === 'function') {
+      addAlert('info', 'Strategy saved', `${month}: BTC ${(sig.btcWeight*100).toFixed(1)}% / Gold ${(sig.goldWeight*100).toFixed(1)}%`);
+    }
+
+    // Re-render signal history
+    renderBagStrategy();
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = '✗ ' + e.message; statusEl.style.color = 'var(--red)'; }
+  }
+}
+
+function stratLoadMonth(month) {
+  const snap = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
+  if (snap) stratLoadFromSnap(snap);
+  const saveMonthEl = document.getElementById('strat-save-month');
+  if (saveMonthEl) saveMonthEl.textContent = month;
+}
+
+function stratLoadFromSnap(snap) {
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
+  setVal('strat-ism',          snap.ism);
+  setVal('strat-mvrv',         snap.mvrv);
+  setVal('strat-fed',          snap.fed_rate);
+  setVal('strat-ism-prev',     snap.ism_prev);
+  setVal('strat-fed-prev',     snap.fed_prev);
+  setVal('strat-vol-btc',      snap.vol12m_btc);
+  setVal('strat-vol-gold',     snap.vol12m_gold);
+  setVal('strat-sortino-btc',  snap.sortino_btc);
+  setVal('strat-sortino-gold', snap.sortino_gold);
+  stratCalculate();
+}
+
+function stratLoadFromHistory(month) {
+  const monthEl = document.getElementById('strat-month');
+  if (monthEl) { monthEl.value = month; stratLoadMonth(month); }
+}
+
+// ═══════════════════════════════════════
+// NAV HOLDINGS — Target weights display
+// ═══════════════════════════════════════
+function renderNavTargetWeights() {
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  const snap = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  const setW = (id, pct) => { const el = document.getElementById(id); if (el) el.style.width = pct + '%'; };
+
+  if (snap?.target_btc_weight != null) {
+    const btcPct  = (snap.target_btc_weight  * 100).toFixed(1);
+    const goldPct = (snap.target_gold_weight * 100).toFixed(1);
+    set('nav-tw-btc',  btcPct  + '%');
+    set('nav-tw-gold', goldPct + '%');
+    setW('nav-tw-btc-bar',  parseFloat(btcPct));
+    setW('nav-tw-gold-bar', parseFloat(goldPct));
+    set('nav-tw-source', `Saved ${currentMonth} · BTC score ${snap.btc_score?.toFixed(3) || '—'}`);
+
+    // Required trades
+    _renderRequiredTrades(snap.target_btc_weight, snap.target_gold_weight);
+  } else {
+    set('nav-tw-btc',  '—');
+    set('nav-tw-gold', '—');
+    set('nav-tw-source', 'Go to Strategy tab to set weights');
+    const rt = document.getElementById('nav-required-trades');
+    if (rt) rt.textContent = 'Set target weights in Strategy tab';
+  }
+
+  // Month-open prices
+  const mpEl = document.getElementById('nav-month-prices');
+  if (mpEl && snap?.btc_price_aud) {
+    mpEl.innerHTML = [
+      `BTC  $${snap.btc_price_aud.toLocaleString('en-AU',{maximumFractionDigits:0})} AUD`,
+      `PAXG $${snap.gold_price_aud.toLocaleString('en-AU',{maximumFractionDigits:2})} AUD`,
+      `AUD/USD ${snap.aud_usd_rate ? snap.aud_usd_rate.toFixed(4) : '—'}`,
+      `Locked ${snap.prices_locked ? '✓' : '⏳'}`
+    ].map(line => `<div>${line}</div>`).join('');
+  } else if (mpEl) {
+    mpEl.innerHTML = '<div style="color:var(--amber);">Prices not yet locked for this month</div>';
+  }
+}
+
+function _renderRequiredTrades(targetBtc, targetGold) {
+  const data      = navLoad();
+  const positions = computePositions(data.trades);
+  const prices    = data.prices || {};
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  const snap      = (_marcDB.cache.bagSnapshots || []).find(s => s.month === currentMonth);
+  const btcPrice  = prices['Bitcoin']?.priceAUD   || snap?.btc_price_aud  || 0;
+  const goldPrice = prices['PAX Gold']?.priceAUD  || snap?.gold_price_aud || 0;
+
+  const btcQty  = positions['Bitcoin']?.qty   || 0;
+  const goldQty = positions['PAX Gold']?.qty  || 0;
+  const totalVal = btcQty*btcPrice + goldQty*goldPrice;
+
+  if (totalVal <= 0) {
+    const rt = document.getElementById('nav-required-trades');
+    if (rt) rt.innerHTML = '<span style="color:var(--subtle);">No holdings — enter trades first</span>';
+    return;
+  }
+
+  const btcActual  = btcQty  * btcPrice  / totalVal;
+  const goldActual = goldQty * goldPrice / totalVal;
+  const btcDrift   = btcActual  - targetBtc;
+  const goldDrift  = goldActual - targetGold;
+  const btcTrade   = -btcDrift  * totalVal;
+  const goldTrade  = -goldDrift * totalVal;
+
+  const rt = document.getElementById('nav-required-trades');
+  if (!rt) return;
+
+  if (Math.abs(btcDrift) < 0.005 && Math.abs(goldDrift) < 0.005) {
+    rt.innerHTML = '<span style="color:var(--green);">✓ Portfolio on target</span>';
+    return;
+  }
+
+  rt.innerHTML = [
+    ['Bitcoin',  btcTrade,  btcDrift],
+    ['PAX Gold', goldTrade, goldDrift]
+  ].filter(([,t]) => Math.abs(t) > 10).map(([name, trade, drift]) => `
+    <div style="margin-bottom:10px;padding:8px;background:var(--surface2);border-radius:var(--r-sm);border:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+        <span style="font-size:11px;font-weight:600;">${name}</span>
+        <span style="font-family:var(--mono);font-size:13px;font-weight:600;color:${trade>=0?'var(--green)':'var(--red)'};">${trade>=0?'+':''}${navFmt$(trade)}</span>
+      </div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);">${trade>=0?'BUY':'SELL'} · drift ${drift>=0?'+':''}${(drift*100).toFixed(1)}%</div>
+      <button onclick="navOpenTradeModal('${name}','${trade>=0?'buy':'sell'}')"
+        style="width:100%;margin-top:6px;padding:4px;background:${trade>=0?'var(--green-dim)':'var(--red-dim)'};border:1px solid ${trade>=0?'var(--green-mid)':'var(--red)'};color:${trade>=0?'var(--green)':'var(--red)'};border-radius:var(--r-sm);font-size:9px;font-weight:700;cursor:pointer;">
+        + Add Trade
+      </button>
+    </div>`).join('');
 }
 
 // ═══════════════════════════════════════
