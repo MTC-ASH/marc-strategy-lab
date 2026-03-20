@@ -281,9 +281,18 @@ async function dbSaveTrade(trade) {
 }
 
 async function dbDeleteTrade(id) {
-  _marcDB.cache.trades = _marcDB.cache.trades.filter(t => t.id !== id);
+  if (!id) throw new Error('No trade id provided');
+  // Remove from cache immediately
+  _marcDB.cache.trades = (_marcDB.cache.trades || []).filter(t => t.id !== id);
   if (!_marcDB.jwt) return;
-  await fetch(_api() + '/db/bag-trades/' + id, {method:'DELETE', headers: _authHeaders()});
+  const r = await fetch(_api() + '/db/bag-trades/' + id, {
+    method:  'DELETE',
+    headers: _authHeaders()
+  });
+  if (!r.ok) {
+    const txt = await r.text();
+    throw new Error(`Delete failed ${r.status}: ${txt}`);
+  }
 }
 
 // ── BAG Monthly Snapshots ─────────────────────────────────────
@@ -723,20 +732,38 @@ function bagLatestHistory() {
   return BAG_HISTORY[BAG_HISTORY.length - 1];
 }
 
-// Compute current signal from latest history
+// Compute current signal from latest saved strategy snapshot
 function bagCurrentSignal() {
-  const latest = bagLatestHistory();
-  const prev   = BAG_HISTORY[BAG_HISTORY.length - 2];
+  const currentMonth = _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  // Find most recent snapshot with strategy data
+  const snap = [...(_marcDB.cache.bagSnapshots || [])]
+    .sort((a, b) => b.month.localeCompare(a.month))
+    .find(s => s.ism != null);
+
+  // Auto-calculate vol/sortino from price history
+  const calc = bagCalcVolSortino(currentMonth);
+
+  if (snap) {
+    return bagComputeSignal({
+      ism:        parseFloat(snap.ism),
+      mvrv:       parseFloat(snap.mvrv),
+      fedRate:    parseFloat(snap.fed_rate),
+      ismPrev:    snap.ism_prev   ? parseFloat(snap.ism_prev)  : parseFloat(snap.ism),
+      fedPrev:    snap.fed_prev   ? parseFloat(snap.fed_prev)  : parseFloat(snap.fed_rate),
+      btcVol12m:  calc.volBtc,
+      goldVol12m: calc.volGold,
+      btcSortino: calc.downsideBtc,
+      goldSortino:calc.downsideGold,
+    });
+  }
+  // Fallback defaults when no strategy data saved yet
   return bagComputeSignal({
-    ism:       52.4,   // latest known — will be overridden by live calc if available
-    mvrv:      latest.navPerUnit ? 0.48 : 1.0,
-    fedRate:   0.0375,
-    ismPrev:   50.3,
-    fedPrev:   0.0375,
-    btcVol12m:  0.364,
-    goldVol12m: 0.133,
-    btcSortino:  0.345,
-    goldSortino: 0.434
+    ism: 52.4, mvrv: 0.48, fedRate: 0.0375,
+    ismPrev: 50.3, fedPrev: 0.0375,
+    btcVol12m:  calc.volBtc  || 0.364,
+    goldVol12m: calc.volGold || 0.133,
+    btcSortino: calc.downsideBtc  || 0.345,
+    goldSortino:calc.downsideGold || 0.434,
   });
 }
 
@@ -1128,37 +1155,39 @@ function renderBagSignal() {
     </div>
 
     <!-- Macro inputs -->
+    <!-- Recent trades summary card -->
     <div class="card">
       <div class="card-hdr">
-        <span class="card-title">Macro Inputs</span>
-        <span class="card-meta" style="color:var(--amber);">⌖ regime calculator</span>
+        <span class="card-title">Recent Trades</span>
+        <span class="card-meta">last 3 trades</span>
       </div>
-      <div class="card-body">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
-          ${[['ISM PMI','nav-rc-pmi','52.4'],['MVRV Z','','0.48'],['Fed Rate','nav-rc-gdp','3.75%'],['BTC Score','','signal']].map(([l,id,def]) => `
-            <div style="padding:8px 10px;background:var(--surface2);border-radius:var(--r-sm);border:1px solid var(--border);">
-              <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:3px;">${l}</div>
-              <div style="font-family:var(--mono);font-size:14px;color:var(--text);">${l==='BTC Score'?signal.btcScore.toFixed(3):def}</div>
-            </div>`).join('')}
-        </div>
-        <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);margin-bottom:8px;">Update inputs via NAV &amp; Holdings → Regime Calculator</div>
-        <button onclick="switchBagTab('nav')"
-          style="width:100%;padding:7px;background:var(--amber-dim);border:1px solid var(--amber);color:var(--amber);border-radius:var(--r-sm);font-size:10px;font-weight:700;cursor:pointer;">
-          ↻ Update Regime Inputs
-        </button>
+      <div class="card-body-flush">
+        ${(() => {
+          const trades = [...(navLoad().trades)].sort((a,b) => new Date(b.date)-new Date(a.date)).slice(0,3);
+          if (!trades.length) return '<div style="padding:20px;text-align:center;color:var(--subtle);font-family:var(--mono);font-size:11px;">No trades recorded yet</div>';
+          return trades.map(t => {
+            const dc = t.direction==='buy'?'var(--green)':'var(--red)';
+            const db = t.direction==='buy'?'var(--green-dim)':'var(--red-dim)';
+            return `<div style="padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+              <span style="font-family:var(--mono);font-size:9px;padding:2px 6px;background:${db};color:${dc};border-radius:2px;font-weight:700;">${t.direction.toUpperCase()}</span>
+              <span style="font-size:11px;font-weight:600;flex:1;">${t.asset}</span>
+              <span style="font-family:var(--mono);font-size:11px;">${navFmt$(t.audAmount)}</span>
+              <span style="font-family:var(--mono);font-size:10px;color:var(--subtle);">${t.date}</span>
+            </div>`;
+          }).join('');
+        })()}
       </div>
     </div>
   `;
+
+  // Now append performance section to same grid
+  _renderPerformanceIntoGrid(grid, snapshots);
 }
 
 // ═══════════════════════════════════════
-// PERFORMANCE PAGE
+// PERFORMANCE — renders into overview grid
 // ═══════════════════════════════════════
-function renderBagPerformance() {
-  // Use Supabase snapshots as source of truth
-  const snapshots = [...(_marcDB.cache.bagSnapshots || [])]
-    .sort((a, b) => a.month.localeCompare(b.month));
-
+function _renderPerformanceIntoGrid(grid, snapshots) {
   // Build monthly series from bagCalcNAV
   const series = snapshots.map((snap, i) => {
     const prev = i > 0 ? snapshots[i-1] : null;
@@ -1176,105 +1205,93 @@ function renderBagPerformance() {
     };
   }).filter(s => s.officialUnit > 0);
 
+  if (!series.length) return;
+
   const dates    = series.map(s => s.month);
   const navUnits = series.map(s => s.officialUnit);
   const rets     = series.map(s => s.actualReturn).filter(v => v != null);
 
-  // Cumulative series starting at 1.0 (inception = $1/unit)
   const inceptionUnit = navUnits[0] || 1;
-  const navCum  = navUnits.map(v => v / inceptionUnit);
+  const navCum        = navUnits.map(v => v / inceptionUnit);
 
-  // BTC and Gold cumulative from monthly returns
   let btcCum = 1, goldCum = 1;
-  const btcCums  = series.map(s => {
-    if (s.btcReturn != null) btcCum *= (1 + s.btcReturn);
-    return btcCum;
-  });
-  const goldCums = series.map(s => {
-    if (s.goldReturn != null) goldCum *= (1 + s.goldReturn);
-    return goldCum;
-  });
+  const btcCums  = series.map(s => { if (s.btcReturn  != null) btcCum  *= (1+s.btcReturn);  return btcCum; });
+  const goldCums = series.map(s => { if (s.goldReturn != null) goldCum *= (1+s.goldReturn); return goldCum; });
 
-  // Stats
   const n       = rets.length;
-  const mean    = n > 0 ? rets.reduce((s,x) => s+x, 0) / n : 0;
-  const std     = n > 1 ? Math.sqrt(rets.reduce((s,x) => s+(x-mean)**2, 0) / (n-1)) : 0;
+  const mean    = n > 0 ? rets.reduce((s,x)=>s+x,0)/n : 0;
+  const std     = n > 1 ? Math.sqrt(rets.reduce((s,x)=>s+(x-mean)**2,0)/(n-1)) : 0;
   const sharpe  = std > 0 ? (mean/std)*Math.sqrt(12) : 0;
-  const dn      = rets.filter(r => r < 0);
-  const dd2     = dn.length ? Math.sqrt(dn.reduce((s,r) => s+r*r, 0)/dn.length) : 1e-9;
-  const sortino = mean / dd2 * Math.sqrt(12);
-  let peak = inceptionUnit, mdd = 0;
-  for (const v of navUnits) {
-    if (v > peak) peak = v;
-    const d = (peak - v) / peak;
-    if (d > mdd) mdd = d;
-  }
-  const totalRet = navUnits.length > 1
-    ? (navUnits[navUnits.length-1] / inceptionUnit) - 1
-    : 0;
-  const vsBtc   = totalRet - (btcCum - 1);
-  const vsGold  = totalRet - (goldCum - 1);
+  const dn      = rets.filter(r=>r<0);
+  const sortino = dn.length ? (mean/Math.sqrt(dn.reduce((s,r)=>s+r*r,0)/dn.length))*Math.sqrt(12) : 0;
+  let peak = navCum[0]||1, mdd = 0;
+  for (const v of navCum) { if(v>peak) peak=v; const d=(peak-v)/peak; if(d>mdd) mdd=d; }
+  const totalRet = navCum.length>1 ? navCum[navCum.length-1]-1 : 0;
+  const vsBtc    = totalRet - (btcCum-1);
+  const vsGold   = totalRet - (goldCum-1);
 
-  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  set('perf-kpi-ret',     navPct(totalRet, 1));
-  set('perf-kpi-sharpe',  sharpe.toFixed(2));
-  set('perf-kpi-mdd',    '-' + (mdd*100).toFixed(1) + '%');
-  set('perf-kpi-best',   n > 0 ? '+' + (Math.max(...rets)*100).toFixed(1) + '%' : '—');
-  set('perf-kpi-worst',  n > 0 ? (Math.min(...rets)*100).toFixed(1) + '%' : '—');
-  set('perf-kpi-sortino', sortino.toFixed(2));
+  // Update overview KPI strip with performance data
+  const set = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+  set('bag-kpi-nav', navFmt$(navUnits[navUnits.length-1] * (parseFloat((_marcDB.cache.bagSnapshots||[]).find(s=>s.month===series[series.length-1]?.month)?.units_issued||0)||1)));
 
-  const grid = document.getElementById('bag-perf-grid');
-  if (!grid) return;
+  // Add performance section header
+  const perfHeader = document.createElement('div');
+  perfHeader.style.cssText = 'grid-column:span 2;padding:10px 0 4px;border-top:1px solid var(--border);margin-top:4px;';
+  perfHeader.innerHTML = '<span style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:2px;text-transform:uppercase;">Performance</span>';
+  grid.appendChild(perfHeader);
 
-  grid.innerHTML = `
-    <div class="card card-span2">
-      <div class="card-hdr">
-        <span class="card-title">NAV per Unit — since inception</span>
-        <span class="card-meta">${series[0]?.month || '—'} → present · base = $${inceptionUnit.toFixed(4)}</span>
-      </div>
-      <div class="card-body-flush"><div id="bag-perf-cumret" style="height:220px;"></div></div>
+  // Performance stats row
+  const statsEl = document.createElement('div');
+  statsEl.style.cssText = 'grid-column:span 2;';
+  statsEl.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:12px;">
+      ${[
+        ['Total Return',  navPct(totalRet,2), totalRet>=0?'g':'r'],
+        ['Sharpe',        sharpe.toFixed(2), sharpe>=1?'g':sharpe>=0.5?'a':'r'],
+        ['Sortino',       sortino.toFixed(2), 'b'],
+        ['Max DD',        '-'+(mdd*100).toFixed(1)+'%', 'r'],
+        ['vs BTC',        navPct(vsBtc,1), vsBtc>=0?'g':'r'],
+        ['vs Gold',       navPct(vsGold,1), vsGold>=0?'g':'r'],
+      ].map(([l,v,c])=>`<div class="kpi"><div class="kpi-l">${l}</div><div class="kpi-v ${c}">${v}</div></div>`).join('')}
+    </div>`;
+  grid.appendChild(statsEl);
+
+  // NAV per unit chart
+  const cumEl = document.createElement('div');
+  cumEl.className = 'card card-span2';
+  cumEl.innerHTML = `
+    <div class="card-hdr">
+      <span class="card-title">NAV per Unit — since inception</span>
+      <span class="card-meta">${series[0]?.month||'—'} → present · base $${inceptionUnit.toFixed(4)}</span>
     </div>
+    <div class="card-body-flush"><div id="bag-perf-cumret" style="height:200px;"></div></div>`;
+  grid.appendChild(cumEl);
 
-    <div class="card">
-      <div class="card-hdr"><span class="card-title">Monthly Returns</span><span class="card-meta">actual vs raw</span></div>
-      <div class="card-body-flush"><div id="bag-perf-monthly" style="height:200px;"></div></div>
-    </div>
+  // Monthly returns chart
+  const mRetsEl = document.createElement('div');
+  mRetsEl.className = 'card';
+  mRetsEl.innerHTML = `
+    <div class="card-hdr"><span class="card-title">Monthly Returns</span><span class="card-meta">actual vs raw</span></div>
+    <div class="card-body-flush"><div id="bag-perf-monthly" style="height:180px;"></div></div>`;
+  grid.appendChild(mRetsEl);
 
-    <div class="card">
-      <div class="card-hdr"><span class="card-title">Drawdown</span><span class="card-meta">Max DD: -${(mdd*100).toFixed(1)}%</span></div>
-      <div class="card-body-flush"><div id="bag-perf-dd" style="height:200px;"></div></div>
-    </div>
+  // Drawdown chart
+  const ddEl = document.createElement('div');
+  ddEl.className = 'card';
+  ddEl.innerHTML = `
+    <div class="card-hdr"><span class="card-title">Drawdown</span><span class="card-meta">Max: -${(mdd*100).toFixed(1)}%</span></div>
+    <div class="card-body-flush"><div id="bag-perf-dd" style="height:180px;"></div></div>`;
+  grid.appendChild(ddEl);
 
-    <div class="card">
-      <div class="card-hdr"><span class="card-title">BTC / Gold Weight History</span><span class="card-meta">from strategy tab</span></div>
-      <div class="card-body-flush"><div id="bag-perf-weights" style="height:200px;"></div></div>
-    </div>
+  // Weight history chart
+  const wEl = document.createElement('div');
+  wEl.className = 'card card-span2';
+  wEl.innerHTML = `
+    <div class="card-hdr"><span class="card-title">BTC / Gold Weight History</span><span class="card-meta">from strategy tab</span></div>
+    <div class="card-body-flush"><div id="bag-perf-weights" style="height:160px;"></div></div>`;
+  grid.appendChild(wEl);
 
-    <div class="card">
-      <div class="card-hdr"><span class="card-title">Performance Summary</span></div>
-      <div class="card-body">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          ${[
-            ['Total Return',  navPct(totalRet,2),              totalRet>=0?'g':'r'],
-            ['Sharpe Ratio',  sharpe.toFixed(2),               sharpe>=1.5?'g':sharpe>=0.8?'a':'r'],
-            ['Sortino',       sortino.toFixed(2),              'b'],
-            ['Max Drawdown', '-'+(mdd*100).toFixed(1)+'%',    'r'],
-            ['Best Month',   n>0?'+'+(Math.max(...rets)*100).toFixed(1)+'%':'—', 'g'],
-            ['Worst Month',  n>0?(Math.min(...rets)*100).toFixed(1)+'%':'—',     'r'],
-            ['vs BTC',       navPct(vsBtc,1),                 vsBtc>=0?'g':'r'],
-            ['vs Gold',      navPct(vsGold,1),                vsGold>=0?'g':'r'],
-            ['Months live',  n.toString(),                    'w'],
-            ['Data source',  series.filter(s=>s.isBC).length+'/'+n+' BC confirmed', 'b'],
-          ].map(([l,v,c]) => `
-            <div class="kpi">
-              <div class="kpi-l">${l}</div>
-              <div class="kpi-v ${c}">${v}</div>
-            </div>`).join('')}
-        </div>
-      </div>
-    </div>
-  `;
-
+  // Render charts
   setTimeout(() => {
     const CFG  = {displayModeBar:false, responsive:true};
     const base = {
@@ -1284,56 +1301,46 @@ function renderBagPerformance() {
       xaxis:{gridcolor:'#1C1F2E',linecolor:'#252840',tickfont:{size:8}},
       yaxis:{gridcolor:'#1C1F2E',linecolor:'#252840',tickfont:{size:8}},
       hovermode:'x unified', showlegend:true,
-      legend:{bgcolor:'rgba(0,0,0,0)',font:{size:8},orientation:'h',y:-0.15}
+      legend:{bgcolor:'rgba(0,0,0,0)',font:{size:8},orientation:'h',y:-0.18}
     };
 
-    // NAV per unit vs BTC and Gold
     if (document.getElementById('bag-perf-cumret') && navCum.length) {
       Plotly.react('bag-perf-cumret', [
-        {x:dates, y:navCum,  name:'BAG Fund', type:'scatter', mode:'lines', line:{color:'#E8E9F0',width:2.5}},
-        {x:dates, y:btcCums, name:'Bitcoin',  type:'scatter', mode:'lines', line:{color:'#FFB020',width:1.5,dash:'dot'}},
-        {x:dates, y:goldCums,name:'PAX Gold', type:'scatter', mode:'lines', line:{color:'#00C97A',width:1.5,dash:'dot'}},
+        {x:dates,y:navCum,  name:'BAG Fund',type:'scatter',mode:'lines',line:{color:'#E8E9F0',width:2.5}},
+        {x:dates,y:btcCums, name:'Bitcoin', type:'scatter',mode:'lines',line:{color:'#FFB020',width:1.5,dash:'dot'}},
+        {x:dates,y:goldCums,name:'PAX Gold',type:'scatter',mode:'lines',line:{color:'#00C97A',width:1.5,dash:'dot'}},
       ], {...base, yaxis:{...base.yaxis,tickformat:'.3f'}}, CFG);
     }
 
-    // Monthly actual vs raw
-    const mDates  = series.filter(s => s.actualReturn != null).map(s => s.month);
-    const mActual = series.filter(s => s.actualReturn != null).map(s => (s.actualReturn*100).toFixed(2));
-    const mRaw    = series.filter(s => s.rawReturn    != null).map(s => (s.rawReturn*100).toFixed(2));
+    const mDates  = series.filter(s=>s.actualReturn!=null).map(s=>s.month);
+    const mActual = series.filter(s=>s.actualReturn!=null).map(s=>+(s.actualReturn*100).toFixed(2));
+    const mRaw    = series.filter(s=>s.rawReturn!=null).map(s=>+(s.rawReturn*100).toFixed(2));
     if (document.getElementById('bag-perf-monthly') && mDates.length) {
       Plotly.react('bag-perf-monthly', [
-        {x:mDates, y:mActual, name:'Actual', type:'bar',
-          marker:{color:mActual.map(v=>parseFloat(v)>=0?'rgba(0,201,122,0.8)':'rgba(255,77,109,0.8)')},
-          hovertemplate:'%{x}: %{y:.2f}%<extra>Actual</extra>'},
-        {x:mDates, y:mRaw, name:'Raw', type:'scatter', mode:'lines+markers',
-          line:{color:'rgba(255,176,32,0.7)',width:1.5,dash:'dot'},marker:{size:4},
-          hovertemplate:'%{x}: %{y:.2f}%<extra>Raw</extra>'},
-      ], {...base, barmode:'overlay', yaxis:{...base.yaxis,ticksuffix:'%'}}, CFG);
+        {x:mDates,y:mActual,name:'Actual',type:'bar',marker:{color:mActual.map(v=>v>=0?'rgba(0,201,122,0.8)':'rgba(255,77,109,0.8)')},hovertemplate:'%{x}: %{y:.2f}%<extra>Actual</extra>'},
+        {x:mDates,y:mRaw,name:'Raw',type:'scatter',mode:'lines+markers',line:{color:'rgba(255,176,32,0.7)',width:1.5,dash:'dot'},marker:{size:4},hovertemplate:'%{x}: %{y:.2f}%<extra>Raw</extra>'},
+      ], {...base,yaxis:{...base.yaxis,ticksuffix:'%'}}, CFG);
     }
 
-    // Drawdown
-    let peakNPU = navCum[0] || 1;
+    let peakNPU = navCum[0]||1;
     const ddSeries = navCum.map(v => { if(v>peakNPU) peakNPU=v; return -((peakNPU-v)/peakNPU)*100; });
     if (document.getElementById('bag-perf-dd') && ddSeries.length) {
-      Plotly.react('bag-perf-dd', [{
-        x:dates, y:ddSeries, type:'scatter', mode:'lines', fill:'tozeroy',
-        line:{color:'#FF4D6D',width:1}, fillcolor:'rgba(255,77,109,0.12)',
-      }], {...base, yaxis:{...base.yaxis,ticksuffix:'%'}, showlegend:false}, CFG);
+      Plotly.react('bag-perf-dd',[{x:dates,y:ddSeries,type:'scatter',mode:'lines',fill:'tozeroy',line:{color:'#FF4D6D',width:1},fillcolor:'rgba(255,77,109,0.12)'}],
+        {...base,yaxis:{...base.yaxis,ticksuffix:'%'},showlegend:false},CFG);
     }
 
-    // Weight history from snapshots
-    const wSnaps = snapshots.filter(s => s.target_btc_weight != null);
-    const wDates = wSnaps.map(s => s.month);
-    const wBtc   = wSnaps.map(s => (parseFloat(s.target_btc_weight)*100).toFixed(1));
-    const wGold  = wSnaps.map(s => (parseFloat(s.target_gold_weight)*100).toFixed(1));
-    if (document.getElementById('bag-perf-weights') && wDates.length) {
+    const wSnaps = snapshots.filter(s=>s.target_btc_weight!=null);
+    if (document.getElementById('bag-perf-weights') && wSnaps.length) {
       Plotly.react('bag-perf-weights', [
-        {x:wDates, y:wBtc,  name:'BTC',  type:'scatter', mode:'lines+markers', line:{color:'#FFB020',width:2}, marker:{size:5}},
-        {x:wDates, y:wGold, name:'Gold', type:'scatter', mode:'lines+markers', line:{color:'#00C97A',width:2}, marker:{size:5}},
-      ], {...base, yaxis:{...base.yaxis,ticksuffix:'%',range:[0,100]}}, CFG);
+        {x:wSnaps.map(s=>s.month),y:wSnaps.map(s=>+(parseFloat(s.target_btc_weight)*100).toFixed(1)),name:'BTC',type:'scatter',mode:'lines+markers',line:{color:'#FFB020',width:2},marker:{size:5}},
+        {x:wSnaps.map(s=>s.month),y:wSnaps.map(s=>+(parseFloat(s.target_gold_weight)*100).toFixed(1)),name:'Gold',type:'scatter',mode:'lines+markers',line:{color:'#00C97A',width:2},marker:{size:5}},
+      ],{...base,yaxis:{...base.yaxis,ticksuffix:'%',range:[0,100]}},CFG);
     }
-  }, 100);
+  }, 150);
 }
+
+// Keep renderBagPerformance as a no-op alias for any remaining references
+function renderBagPerformance() { renderBagOverview(); }
 
 // ═══════════════════════════════════════
 // NAV DASHBOARD (full holdings page)
@@ -2376,7 +2383,7 @@ function renderMarkdown(text) {
 const _origSwitchBagTab = typeof switchBagTab !== 'undefined' ? switchBagTab : null;
 function switchBagTab(tab) {
   document.querySelectorAll('#mode-bag .stab').forEach((t, i) => {
-    const tabs = ['overview','nav','navnumbers','performance','strategy','models'];
+    const tabs = ['overview','nav','navnumbers','strategy','models'];
     t.classList.toggle('active', tabs[i] === tab);
   });
   document.querySelectorAll('#mode-bag .subpage').forEach(p => p.classList.remove('active'));
@@ -2386,7 +2393,6 @@ function switchBagTab(tab) {
   if (tab === 'overview')    renderBagOverview();
   if (tab === 'nav')         { renderNavDashboard(); renderNavAgentContext(); }
   if (tab === 'navnumbers')  renderBagNavNumbers();
-  if (tab === 'performance') renderBagPerformance();
   if (tab === 'strategy')    renderBagStrategy();
   if (tab === 'models')      renderModelLibrary();
 
@@ -2426,18 +2432,14 @@ function renderBagStrategy() {
             onchange="stratLoadMonth(this.value)"/>
         </div>
 
-        <!-- Inputs -->
+        <!-- Inputs — manual entries only -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
           ${[
-            ['ISM PMI', 'strat-ism', '52.4', '0.1', 'Manufacturing activity. >50 = expansion, <50 = contraction.'],
-            ['MVRV Z-Score', 'strat-mvrv', '0.48', '0.01', 'BTC on-chain valuation. Low = undervalued = BTC bullish.'],
-            ['Fed Cash Rate', 'strat-fed', '0.0375', '0.0025', 'US Federal Funds Rate as decimal. e.g. 3.75% = 0.0375'],
-            ['Prev Month ISM', 'strat-ism-prev', '52.6', '0.1', 'Prior month ISM for change calculation.'],
-            ['Prev Month Fed', 'strat-fed-prev', '0.0375', '0.0025', 'Prior month Fed rate for change calculation.'],
-            ['Vol 12m BTC', 'strat-vol-btc', '0.364', '0.001', '12-month annualised volatility for BTC.'],
-            ['Vol 12m Gold', 'strat-vol-gold', '0.133', '0.001', '12-month annualised volatility for PAX Gold.'],
-            ['Sortino BTC', 'strat-sortino-btc', '0.345', '0.001', '12-month Sortino ratio for BTC.'],
-            ['Sortino Gold', 'strat-sortino-gold', '0.434', '0.001', '12-month Sortino ratio for PAX Gold.'],
+            ['ISM PMI', 'strat-ism', '52.4', '0.1', '>50 = expansion, <50 = contraction'],
+            ['MVRV Z-Score', 'strat-mvrv', '0.48', '0.01', 'BTC on-chain valuation. Low = BTC undervalued'],
+            ['Fed Cash Rate', 'strat-fed', '0.0375', '0.0025', 'As decimal. e.g. 3.75% = 0.0375'],
+            ['Prev Month ISM', 'strat-ism-prev', '', '0.1', 'Prior month ISM for change calculation'],
+            ['Prev Month Fed', 'strat-fed-prev', '', '0.0025', 'Prior month Fed rate'],
           ].map(([label, id, placeholder, step, hint]) => `
             <div>
               <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:3px;" title="${hint}">${label}</div>
@@ -2445,6 +2447,18 @@ function renderBagStrategy() {
                 style="width:100%;font-family:var(--mono);font-size:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 7px;border-radius:var(--r-sm);box-sizing:border-box;outline:none;"
                 oninput="stratPreview()"/>
             </div>`).join('')}
+        </div>
+
+        <!-- Auto-calculated values (read-only) -->
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px;margin-bottom:12px;">
+          <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Auto-Calculated from Price History</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;">
+            <div style="display:flex;justify-content:space-between;"><span style="color:var(--muted);">Vol 12m BTC</span><span style="font-family:var(--mono);font-weight:600;color:var(--amber);" id="strat-calc-vol-btc">—</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:var(--muted);">Vol 12m Gold</span><span style="font-family:var(--mono);font-weight:600;color:var(--green);" id="strat-calc-vol-gold">—</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:var(--muted);">Downside Dev BTC</span><span style="font-family:var(--mono);font-weight:600;" id="strat-calc-downside-btc">—</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:var(--muted);">Downside Dev Gold</span><span style="font-family:var(--mono);font-weight:600;" id="strat-calc-downside-gold">—</span></div>
+          </div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--subtle);margin-top:6px;" id="strat-calc-months">—</div>
         </div>
 
         <!-- Calculate button -->
@@ -2521,33 +2535,88 @@ function renderBagStrategy() {
   }
 }
 
+// ── Auto-calculate 12m vol and downside deviation from snapshot history ──
+function bagCalcVolSortino(targetMonth) {
+  // Get trailing 12 monthly returns ending at targetMonth
+  const snapshots = [...(_marcDB.cache.bagSnapshots || [])]
+    .sort((a, b) => a.month.localeCompare(b.month))
+    .filter(s => s.month <= targetMonth && s.btc_price_aud && s.gold_price_aud);
+
+  if (snapshots.length < 2) return { volBtc: 0.364, volGold: 0.133, downsideBtc: 0.345, downsideGold: 0.434, months: 0 };
+
+  // Compute monthly returns from consecutive price pairs
+  const btcRets = [], goldRets = [];
+  for (let i = 1; i < snapshots.length; i++) {
+    const prev = snapshots[i-1], cur = snapshots[i];
+    const btcP  = parseFloat(cur.btc_price_aud),  btcPp = parseFloat(prev.btc_price_aud);
+    const goldP = parseFloat(cur.gold_price_aud), goldPp = parseFloat(prev.gold_price_aud);
+    if (btcP > 0 && btcPp > 0)   btcRets.push((btcP  / btcPp)  - 1);
+    if (goldP > 0 && goldPp > 0) goldRets.push((goldP / goldPp) - 1);
+  }
+
+  // Use trailing 12 months max
+  const bRets = btcRets.slice(-12);
+  const gRets = goldRets.slice(-12);
+  const n     = bRets.length;
+
+  if (n < 2) return { volBtc: 0.364, volGold: 0.133, downsideBtc: 0.345, downsideGold: 0.434, months: n };
+
+  // Vol = std(returns, ddof=1) * sqrt(12) — confirmed formula
+  const stdv = (arr) => {
+    const m = arr.reduce((s,x) => s+x, 0) / arr.length;
+    return Math.sqrt(arr.reduce((s,x) => s+(x-m)**2, 0) / (arr.length-1));
+  };
+  const volBtc  = stdv(bRets) * Math.sqrt(12);
+  const volGold = stdv(gRets) * Math.sqrt(12);
+
+  // Downside deviation = sqrt(sum(neg²)/n_neg) * sqrt(12)
+  // Used as risk denominator in riskScale = min(1, targetVol/downsideDev)
+  const downside = (arr) => {
+    const neg = arr.filter(r => r < 0);
+    if (!neg.length) return 0.001;
+    return Math.sqrt(neg.reduce((s,r) => s + r*r, 0) / neg.length) * Math.sqrt(12);
+  };
+  const downsideBtc  = downside(bRets);
+  const downsideGold = downside(gRets);
+
+  return { volBtc, volGold, downsideBtc, downsideGold, months: n, bRets, gRets };
+}
+
 function stratPreview() {
-  // Auto-calculate on input change
   stratCalculate(true);
 }
 
 function stratCalculate(silent) {
   const get = id => { const el = document.getElementById(id); return el ? parseFloat(el.value) : NaN; };
-  const ism      = get('strat-ism');
-  const mvrv     = get('strat-mvrv');
-  const fedRate  = get('strat-fed');
-  const ismPrev  = get('strat-ism-prev');
-  const fedPrev  = get('strat-fed-prev');
-  const volBtc   = get('strat-vol-btc');
-  const volGold  = get('strat-vol-gold');
-  const sortBtc  = get('strat-sortino-btc');
-  const sortGold = get('strat-sortino-gold');
+  const ism     = get('strat-ism');
+  const mvrv    = get('strat-mvrv');
+  const fedRate = get('strat-fed');
+  const ismPrev = get('strat-ism-prev');
+  const fedPrev = get('strat-fed-prev');
 
   if ([ism, mvrv, fedRate].some(isNaN)) return;
 
+  // Auto-calculate vol and sortino from snapshot history
+  const monthEl    = document.getElementById('strat-month');
+  const month      = monthEl?.value || _marcDB.currentMonth || new Date().toISOString().slice(0,7);
+  const calculated = bagCalcVolSortino(month);
+
+  // Update the display of auto-calculated values
+  const setCalc = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setCalc('strat-calc-vol-btc',      calculated.volBtc.toFixed(4));
+  setCalc('strat-calc-vol-gold',     calculated.volGold.toFixed(4));
+  setCalc('strat-calc-downside-btc', calculated.downsideBtc.toFixed(4));
+  setCalc('strat-calc-downside-gold',calculated.downsideGold.toFixed(4));
+  setCalc('strat-calc-months',       calculated.months + ' months of price history');
+
   const signal = bagComputeSignal({
     ism, mvrv, fedRate,
-    ismPrev:    isNaN(ismPrev)  ? ism  : ismPrev,
-    fedPrev:    isNaN(fedPrev)  ? fedRate : fedPrev,
-    btcVol12m:  isNaN(volBtc)  ? 0.364 : volBtc,
-    goldVol12m: isNaN(volGold) ? 0.133 : volGold,
-    btcSortino: isNaN(sortBtc) ? 0.345 : sortBtc,
-    goldSortino:isNaN(sortGold)? 0.434 : sortGold,
+    ismPrev:     isNaN(ismPrev) ? ism     : ismPrev,
+    fedPrev:     isNaN(fedPrev) ? fedRate : fedPrev,
+    btcVol12m:   calculated.volBtc,
+    goldVol12m:  calculated.volGold,
+    btcSortino:  calculated.downsideBtc,
+    goldSortino: calculated.downsideGold,
   });
 
   const resultEl = document.getElementById('strat-result');
@@ -2557,22 +2626,31 @@ function stratCalculate(silent) {
   set('strat-w-btc',  (signal.btcWeight*100).toFixed(1)+'%');
   set('strat-w-gold', (signal.goldWeight*100).toFixed(1)+'%');
 
-  const changeFed  = isNaN(fedPrev)  ? 0 : (fedRate-fedPrev)/Math.max(fedPrev,0.001);
-  const changeISM  = isNaN(ismPrev)  ? 0 : ism - ismPrev;
-  const cashScore  = 1/3 - changeFed*(4/3);
-  const mvrvScore  = Math.min(1, Math.max(0, (4.5-mvrv)/3.5));
-  const ismScore   = Math.max(0, (ism-50)/10);
-  const btcScore   = 0.5*ismScore + 0.2*cashScore + 0.3*mvrvScore;
+  const changeFed = isNaN(fedPrev) ? 0 : (fedRate - fedPrev) / Math.max(fedPrev, 0.001);
+  const cashScore = 1/3 - changeFed*(4/3);
+  const mvrvScore = Math.min(1, Math.max(0, (4.5 - mvrv) / 3.5));
+  const ismScore  = Math.max(0, (ism - 50) / 10);
+  const btcScore  = 0.5*ismScore + 0.2*cashScore + 0.3*mvrvScore;
+
+  const riskScale = Math.min(1, BAG_PARAMS.targetVol / Math.max(calculated.downsideBtc, 0.001));
 
   set('strat-breakdown', [
-    `BTC Score: ${btcScore.toFixed(4)} (ISM ${ismScore.toFixed(4)} × 0.5 + Cash ${cashScore.toFixed(4)} × 0.2 + MVRV ${mvrvScore.toFixed(4)} × 0.3)`,
-    `Inv-Vol BTC: ${signal.btcVolWeight.toFixed(4)} | Inv-Vol Gold: ${signal.goldVolWeight.toFixed(4)}`,
-    `Factor blend: ${BAG_PARAMS.factorVolBlend*100}% factor + ${(1-BAG_PARAMS.factorVolBlend)*100}% vol`,
+    `BTC Score: ${btcScore.toFixed(4)}  (ISM×0.5=${ismScore.toFixed(4)} + Cash×0.2=${cashScore.toFixed(4)} + MVRV×0.3=${mvrvScore.toFixed(4)})`,
+    `Vol 12m: BTC ${calculated.volBtc.toFixed(4)} · Gold ${calculated.volGold.toFixed(4)}  (${calculated.months}m history)`,
+    `Risk scale: min(1, ${BAG_PARAMS.targetVol}/${calculated.downsideBtc.toFixed(4)}) = ${riskScale.toFixed(4)}`,
+    `Inv-Vol BTC: ${signal.btcVolWeight.toFixed(4)} · Inv-Vol Gold: ${signal.goldVolWeight.toFixed(4)}`,
+    `Blended BTC: ${(riskScale * signal.btcVolWeight).toFixed(4)}`,
   ].join('\n'));
 
-  // Store for save
   window._stratLastSignal = signal;
-  window._stratLastInputs = { ism, mvrv, fedRate, ismPrev, fedPrev, volBtc, volGold, sortBtc, sortGold, btcScore };
+  window._stratLastInputs = {
+    ism, mvrv, fedRate, ismPrev, fedPrev,
+    volBtc:   calculated.volBtc,
+    volGold:  calculated.volGold,
+    sortBtc:  calculated.downsideBtc,
+    sortGold: calculated.downsideGold,
+    btcScore
+  };
 }
 
 async function stratSaveMonth() {
@@ -2629,15 +2707,11 @@ function stratLoadMonth(month) {
 
 function stratLoadFromSnap(snap) {
   const setVal = (id, val) => { const el = document.getElementById(id); if (el && val != null) el.value = val; };
-  setVal('strat-ism',          snap.ism);
-  setVal('strat-mvrv',         snap.mvrv);
-  setVal('strat-fed',          snap.fed_rate);
-  setVal('strat-ism-prev',     snap.ism_prev);
-  setVal('strat-fed-prev',     snap.fed_prev);
-  setVal('strat-vol-btc',      snap.vol12m_btc);
-  setVal('strat-vol-gold',     snap.vol12m_gold);
-  setVal('strat-sortino-btc',  snap.sortino_btc);
-  setVal('strat-sortino-gold', snap.sortino_gold);
+  setVal('strat-ism',      snap.ism);
+  setVal('strat-mvrv',     snap.mvrv);
+  setVal('strat-fed',      snap.fed_rate);
+  setVal('strat-ism-prev', snap.ism_prev);
+  setVal('strat-fed-prev', snap.fed_prev);
   stratCalculate();
 }
 
