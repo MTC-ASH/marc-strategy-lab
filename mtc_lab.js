@@ -114,18 +114,24 @@ async function activateFund(fund) {
   if (!fund) return;
   await dbSetActiveFund(fund);
   renderFundTabs();
-  // Experimental mode banner
   const banner = document.getElementById('exp-banner');
   if (banner) banner.classList.toggle('visible', fund.type === 'experimental');
+
+  // Load all BAG Fund data for this fund
+  await Promise.all([
+    dbLoadTrades(fund.id),
+    dbLoadBagSnapshots(fund.id),
+    dbLoadBagCashflows(fund.id),
+  ]);
+
   // Reload chat history
   if (typeof navChatHistory !== 'undefined') {
     navChatHistory = (_marcDB.cache.messages || []).map(m => ({role: m.role, content: m.content}));
   }
-  // Refresh nav if open
-  if (typeof renderNavDashboard === 'function') {
-    renderNavRegimePanel();
-    renderNavDashboard();
-  }
+
+  // Refresh BAG views if open
+  if (typeof renderNavDashboard === 'function') renderNavDashboard();
+  if (typeof renderBagOverview  === 'function') renderBagOverview();
 }
 
 // ═══════════════════════════════════════
