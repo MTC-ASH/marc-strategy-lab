@@ -1155,41 +1155,72 @@ function renderBagSignal() {
 // PERFORMANCE PAGE
 // ═══════════════════════════════════════
 function renderBagPerformance() {
-  const histRows   = BAG_HISTORY.filter(r => r.date >= '2025-12' && r.navPerUnit !== null);
-  const dates      = histRows.map(r => r.date);
-  const navSeries  = histRows.map(r => r.navPerUnit);
-  const rets       = histRows.filter(r => r.fundRet !== null).map(r => r.fundRet);
-  const btcRets    = histRows.filter(r => r.btcRet  !== null).map(r => r.btcRet);
-  const goldRets   = histRows.filter(r => r.goldRet !== null).map(r => r.goldRet);
+  // Use Supabase snapshots as source of truth
+  const snapshots = [...(_marcDB.cache.bagSnapshots || [])]
+    .sort((a, b) => a.month.localeCompare(b.month));
 
-  // Compute cumulative benchmark series
+  // Build monthly series from bagCalcNAV
+  const series = snapshots.map((snap, i) => {
+    const prev = i > 0 ? snapshots[i-1] : null;
+    const calc = bagCalcNAV(snap, prev);
+    return {
+      month:        snap.month,
+      officialUnit: calc.officialUnit,
+      actualReturn: calc.actualReturn,
+      rawReturn:    calc.rawReturn,
+      btcReturn:    calc.btcReturn,
+      goldReturn:   calc.goldReturn,
+      btcWeight:    snap.target_btc_weight,
+      goldWeight:   snap.target_gold_weight,
+      isBC:         !!snap.bc_nav_per_unit,
+    };
+  }).filter(s => s.officialUnit > 0);
+
+  const dates    = series.map(s => s.month);
+  const navUnits = series.map(s => s.officialUnit);
+  const rets     = series.map(s => s.actualReturn).filter(v => v != null);
+
+  // Cumulative series starting at 1.0 (inception = $1/unit)
+  const inceptionUnit = navUnits[0] || 1;
+  const navCum  = navUnits.map(v => v / inceptionUnit);
+
+  // BTC and Gold cumulative from monthly returns
   let btcCum = 1, goldCum = 1;
-  const btcCums  = [1];
-  const goldCums = [1];
-  for (let i = 0; i < btcRets.length - 1; i++) {
-    btcCum  *= (1 + btcRets[i+1]);  btcCums.push(btcCum);
-    goldCum *= (1 + goldRets[i+1]); goldCums.push(goldCum);
-  }
+  const btcCums  = series.map(s => {
+    if (s.btcReturn != null) btcCum *= (1 + s.btcReturn);
+    return btcCum;
+  });
+  const goldCums = series.map(s => {
+    if (s.goldReturn != null) goldCum *= (1 + s.goldReturn);
+    return goldCum;
+  });
 
   // Stats
-  const totalRet   = navSeries[navSeries.length-1] - 1;
-  const n          = rets.length;
-  const mean       = rets.reduce((s,x) => s+x, 0) / Math.max(n,1);
-  const std        = Math.sqrt(rets.reduce((s,x) => s+(x-mean)**2, 0) / Math.max(n-1,1));
-  const sharpe     = std > 0 ? (mean/std)*Math.sqrt(12) : 0;
-  const dn         = rets.filter(r => r < 0);
-  const dd2        = dn.length ? Math.sqrt(dn.reduce((s,r) => s+r*r, 0)/dn.length) : 1e-9;
-  const sortino    = mean / dd2 * Math.sqrt(12);
-  let peak = 1, mdd = 0;
-  for (const v of navSeries) { if (v > peak) peak = v; const d = (peak-v)/peak; if (d > mdd) mdd = d; }
+  const n       = rets.length;
+  const mean    = n > 0 ? rets.reduce((s,x) => s+x, 0) / n : 0;
+  const std     = n > 1 ? Math.sqrt(rets.reduce((s,x) => s+(x-mean)**2, 0) / (n-1)) : 0;
+  const sharpe  = std > 0 ? (mean/std)*Math.sqrt(12) : 0;
+  const dn      = rets.filter(r => r < 0);
+  const dd2     = dn.length ? Math.sqrt(dn.reduce((s,r) => s+r*r, 0)/dn.length) : 1e-9;
+  const sortino = mean / dd2 * Math.sqrt(12);
+  let peak = inceptionUnit, mdd = 0;
+  for (const v of navUnits) {
+    if (v > peak) peak = v;
+    const d = (peak - v) / peak;
+    if (d > mdd) mdd = d;
+  }
+  const totalRet = navUnits.length > 1
+    ? (navUnits[navUnits.length-1] / inceptionUnit) - 1
+    : 0;
+  const vsBtc   = totalRet - (btcCum - 1);
+  const vsGold  = totalRet - (goldCum - 1);
 
-  // Update KPI strip
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   set('perf-kpi-ret',     navPct(totalRet, 1));
   set('perf-kpi-sharpe',  sharpe.toFixed(2));
   set('perf-kpi-mdd',    '-' + (mdd*100).toFixed(1) + '%');
-  set('perf-kpi-best',   '+' + (Math.max(...rets, 0)*100).toFixed(1) + '%');
-  set('perf-kpi-worst',   (Math.min(...rets, 0)*100).toFixed(1) + '%');
+  set('perf-kpi-best',   n > 0 ? '+' + (Math.max(...rets)*100).toFixed(1) + '%' : '—');
+  set('perf-kpi-worst',  n > 0 ? (Math.min(...rets)*100).toFixed(1) + '%' : '—');
   set('perf-kpi-sortino', sortino.toFixed(2));
 
   const grid = document.getElementById('bag-perf-grid');
@@ -1197,38 +1228,43 @@ function renderBagPerformance() {
 
   grid.innerHTML = `
     <div class="card card-span2">
-      <div class="card-hdr"><span class="card-title">NAV per Unit — since inception</span><span class="card-meta">Dec 2025 → present · base = 1.000</span></div>
+      <div class="card-hdr">
+        <span class="card-title">NAV per Unit — since inception</span>
+        <span class="card-meta">${series[0]?.month || '—'} → present · base = $${inceptionUnit.toFixed(4)}</span>
+      </div>
       <div class="card-body-flush"><div id="bag-perf-cumret" style="height:220px;"></div></div>
     </div>
 
     <div class="card">
-      <div class="card-hdr"><span class="card-title">Monthly Returns</span><span class="card-meta">green = positive</span></div>
-      <div class="card-body-flush"><div id="bag-perf-monthly" style="height:180px;"></div></div>
+      <div class="card-hdr"><span class="card-title">Monthly Returns</span><span class="card-meta">actual vs raw</span></div>
+      <div class="card-body-flush"><div id="bag-perf-monthly" style="height:200px;"></div></div>
     </div>
 
     <div class="card">
       <div class="card-hdr"><span class="card-title">Drawdown</span><span class="card-meta">Max DD: -${(mdd*100).toFixed(1)}%</span></div>
-      <div class="card-body-flush"><div id="bag-perf-dd" style="height:180px;"></div></div>
+      <div class="card-body-flush"><div id="bag-perf-dd" style="height:200px;"></div></div>
     </div>
 
     <div class="card">
-      <div class="card-hdr"><span class="card-title">BTC Weight History</span><span class="card-meta">model allocation over time</span></div>
-      <div class="card-body-flush"><div id="bag-perf-weights" style="height:180px;"></div></div>
+      <div class="card-hdr"><span class="card-title">BTC / Gold Weight History</span><span class="card-meta">from strategy tab</span></div>
+      <div class="card-body-flush"><div id="bag-perf-weights" style="height:200px;"></div></div>
     </div>
 
     <div class="card">
-      <div class="card-hdr"><span class="card-title">Performance Summary</span><span class="card-meta">all-time</span></div>
+      <div class="card-hdr"><span class="card-title">Performance Summary</span></div>
       <div class="card-body">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           ${[
-            ['Total Return',  navPct(totalRet,2), totalRet>=0?'g':'r'],
-            ['Sharpe Ratio',  sharpe.toFixed(2), sharpe>=1.5?'g':sharpe>=0.8?'a':'r'],
-            ['Sortino',       sortino.toFixed(2), 'b'],
-            ['Max Drawdown', '-'+(mdd*100).toFixed(1)+'%', 'r'],
-            ['Best Month',   '+'+(Math.max(...rets,0)*100).toFixed(1)+'%', 'g'],
-            ['Worst Month',  (Math.min(...rets,0)*100).toFixed(1)+'%', 'r'],
-            ['Months live',  n.toString(), 'w'],
-            ['vs BTC',       navPct(totalRet-(btcCum-1),1), (totalRet-(btcCum-1))>=0?'g':'r'],
+            ['Total Return',  navPct(totalRet,2),              totalRet>=0?'g':'r'],
+            ['Sharpe Ratio',  sharpe.toFixed(2),               sharpe>=1.5?'g':sharpe>=0.8?'a':'r'],
+            ['Sortino',       sortino.toFixed(2),              'b'],
+            ['Max Drawdown', '-'+(mdd*100).toFixed(1)+'%',    'r'],
+            ['Best Month',   n>0?'+'+(Math.max(...rets)*100).toFixed(1)+'%':'—', 'g'],
+            ['Worst Month',  n>0?(Math.min(...rets)*100).toFixed(1)+'%':'—',     'r'],
+            ['vs BTC',       navPct(vsBtc,1),                 vsBtc>=0?'g':'r'],
+            ['vs Gold',      navPct(vsGold,1),                vsGold>=0?'g':'r'],
+            ['Months live',  n.toString(),                    'w'],
+            ['Data source',  series.filter(s=>s.isBC).length+'/'+n+' BC confirmed', 'b'],
           ].map(([l,v,c]) => `
             <div class="kpi">
               <div class="kpi-l">${l}</div>
@@ -1239,9 +1275,8 @@ function renderBagPerformance() {
     </div>
   `;
 
-  // Render charts after DOM update
   setTimeout(() => {
-    const CFG = {displayModeBar:false, responsive:true};
+    const CFG  = {displayModeBar:false, responsive:true};
     const base = {
       paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
       font:{family:"'DM Mono',monospace",size:9,color:'#6B6F8E'},
@@ -1252,46 +1287,50 @@ function renderBagPerformance() {
       legend:{bgcolor:'rgba(0,0,0,0)',font:{size:8},orientation:'h',y:-0.15}
     };
 
-    // Cumulative return
-    if (document.getElementById('bag-perf-cumret')) {
+    // NAV per unit vs BTC and Gold
+    if (document.getElementById('bag-perf-cumret') && navCum.length) {
       Plotly.react('bag-perf-cumret', [
-        {x:dates,y:navSeries,name:'BAG Fund',type:'scatter',mode:'lines',line:{color:'#E8E9F0',width:2.5},hovertemplate:'%{y:.4f}<extra>BAG</extra>'},
-        {x:dates,y:btcCums,name:'Bitcoin',type:'scatter',mode:'lines',line:{color:'#FFB020',width:1.5,dash:'dot'},hovertemplate:'%{y:.4f}<extra>BTC</extra>'},
-        {x:dates,y:goldCums,name:'Gold',type:'scatter',mode:'lines',line:{color:'#00C97A',width:1.5,dash:'dot'},hovertemplate:'%{y:.4f}<extra>Gold</extra>'},
+        {x:dates, y:navCum,  name:'BAG Fund', type:'scatter', mode:'lines', line:{color:'#E8E9F0',width:2.5}},
+        {x:dates, y:btcCums, name:'Bitcoin',  type:'scatter', mode:'lines', line:{color:'#FFB020',width:1.5,dash:'dot'}},
+        {x:dates, y:goldCums,name:'PAX Gold', type:'scatter', mode:'lines', line:{color:'#00C97A',width:1.5,dash:'dot'}},
       ], {...base, yaxis:{...base.yaxis,tickformat:'.3f'}}, CFG);
     }
 
-    // Monthly bars
-    const mDates = histRows.filter(r=>r.fundRet!==null).map(r=>r.date);
-    const mRets  = histRows.filter(r=>r.fundRet!==null).map(r=>r.fundRet*100);
-    if (document.getElementById('bag-perf-monthly')) {
-      Plotly.react('bag-perf-monthly', [{
-        x:mDates, y:mRets, type:'bar',
-        marker:{color:mRets.map(v=>v>=0?'rgba(0,201,122,0.7)':'rgba(255,77,109,0.7)')},
-        hovertemplate:'%{x}: %{y:.2f}%<extra></extra>'
-      }], {...base,margin:{l:46,r:10,t:4,b:28},yaxis:{...base.yaxis,ticksuffix:'%'},showlegend:false}, CFG);
+    // Monthly actual vs raw
+    const mDates  = series.filter(s => s.actualReturn != null).map(s => s.month);
+    const mActual = series.filter(s => s.actualReturn != null).map(s => (s.actualReturn*100).toFixed(2));
+    const mRaw    = series.filter(s => s.rawReturn    != null).map(s => (s.rawReturn*100).toFixed(2));
+    if (document.getElementById('bag-perf-monthly') && mDates.length) {
+      Plotly.react('bag-perf-monthly', [
+        {x:mDates, y:mActual, name:'Actual', type:'bar',
+          marker:{color:mActual.map(v=>parseFloat(v)>=0?'rgba(0,201,122,0.8)':'rgba(255,77,109,0.8)')},
+          hovertemplate:'%{x}: %{y:.2f}%<extra>Actual</extra>'},
+        {x:mDates, y:mRaw, name:'Raw', type:'scatter', mode:'lines+markers',
+          line:{color:'rgba(255,176,32,0.7)',width:1.5,dash:'dot'},marker:{size:4},
+          hovertemplate:'%{x}: %{y:.2f}%<extra>Raw</extra>'},
+      ], {...base, barmode:'overlay', yaxis:{...base.yaxis,ticksuffix:'%'}}, CFG);
     }
 
     // Drawdown
-    let peakNPU = 1;
-    const ddSeries = navSeries.map(v => { if(v>peakNPU) peakNPU=v; return -((peakNPU-v)/peakNPU)*100; });
-    if (document.getElementById('bag-perf-dd')) {
+    let peakNPU = navCum[0] || 1;
+    const ddSeries = navCum.map(v => { if(v>peakNPU) peakNPU=v; return -((peakNPU-v)/peakNPU)*100; });
+    if (document.getElementById('bag-perf-dd') && ddSeries.length) {
       Plotly.react('bag-perf-dd', [{
         x:dates, y:ddSeries, type:'scatter', mode:'lines', fill:'tozeroy',
         line:{color:'#FF4D6D',width:1}, fillcolor:'rgba(255,77,109,0.12)',
-        hovertemplate:'%{y:.2f}%<extra>DD</extra>'
-      }], {...base,margin:{l:46,r:10,t:4,b:28},yaxis:{...base.yaxis,ticksuffix:'%'},showlegend:false}, CFG);
+      }], {...base, yaxis:{...base.yaxis,ticksuffix:'%'}, showlegend:false}, CFG);
     }
 
-    // BTC weight history
-    const wDates = BAG_HISTORY.filter(r=>r.btcWeight!==null).map(r=>r.date);
-    const wBtc   = BAG_HISTORY.filter(r=>r.btcWeight!==null).map(r=>(r.btcWeight*100).toFixed(1));
-    const wGold  = BAG_HISTORY.filter(r=>r.goldWeight!==null).map(r=>(r.goldWeight*100).toFixed(1));
-    if (document.getElementById('bag-perf-weights')) {
+    // Weight history from snapshots
+    const wSnaps = snapshots.filter(s => s.target_btc_weight != null);
+    const wDates = wSnaps.map(s => s.month);
+    const wBtc   = wSnaps.map(s => (parseFloat(s.target_btc_weight)*100).toFixed(1));
+    const wGold  = wSnaps.map(s => (parseFloat(s.target_gold_weight)*100).toFixed(1));
+    if (document.getElementById('bag-perf-weights') && wDates.length) {
       Plotly.react('bag-perf-weights', [
-        {x:wDates, y:wBtc,  name:'BTC', type:'scatter', mode:'lines+markers', line:{color:'#FFB020',width:2}, marker:{size:5}, hovertemplate:'%{y}%<extra>BTC</extra>'},
-        {x:wDates, y:wGold, name:'Gold',type:'scatter', mode:'lines+markers', line:{color:'#00C97A',width:2}, marker:{size:5}, hovertemplate:'%{y}%<extra>Gold</extra>'},
-      ], {...base,margin:{l:46,r:10,t:4,b:28},yaxis:{...base.yaxis,ticksuffix:'%',range:[0,100]}}, CFG);
+        {x:wDates, y:wBtc,  name:'BTC',  type:'scatter', mode:'lines+markers', line:{color:'#FFB020',width:2}, marker:{size:5}},
+        {x:wDates, y:wGold, name:'Gold', type:'scatter', mode:'lines+markers', line:{color:'#00C97A',width:2}, marker:{size:5}},
+      ], {...base, yaxis:{...base.yaxis,ticksuffix:'%',range:[0,100]}}, CFG);
     }
   }, 100);
 }
@@ -1714,10 +1753,23 @@ async function navSaveTrade() {
 }
 
 async function navDeleteTrade(id) {
+  if (!id) { console.error('navDeleteTrade: no id'); return; }
   if (!confirm('Delete this trade?')) return;
-  await dbDeleteTrade(id);
-  renderNavDashboard();
-  renderBagOverview();
+  try {
+    await dbDeleteTrade(id);
+    renderNavTradeLog(navLoad().trades);
+    renderNavTradeLogDrawer(navLoad().trades);
+    const countEl = document.getElementById('nav-tradelog-count');
+    if (countEl) {
+      const n = navLoad().trades.length;
+      countEl.textContent = n + ' trade' + (n!==1?'s':'');
+    }
+    renderNavDashboard();
+    renderBagOverview();
+    renderBagNavNumbers();
+  } catch(e) {
+    alert('Delete failed: ' + e.message);
+  }
 }
 
 // ═══════════════════════════════════════
@@ -1850,50 +1902,84 @@ const BAG_FEES = {
   cbCustody:    0.0000333 // 0.0033%/month
 };
 
+// ── Helper: get holdings at end of a given month from trade log ─
+function bagQtyAtEndOfMonth(month) {
+  const trades = (_marcDB.cache.trades || [])
+    .filter(t => t.month <= month)
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const pos = computePositions(trades);
+  return {
+    btcQty:  pos['Bitcoin']?.qty  || 0,
+    goldQty: pos['PAX Gold']?.qty || 0,
+  };
+}
+
 function bagCalcNAV(snap, prevSnap) {
-  // Returns computed monthly NAV figures for a snapshot row
-  const btcQty   = parseFloat(snap.btc_qty  || 0);
-  const goldQty  = parseFloat(snap.gold_qty || 0);
-  const btcPrice = parseFloat(snap.btc_price_aud  || 0);
-  const goldPrice= parseFloat(snap.gold_price_aud || 0);
-  const grossNAV = btcQty*btcPrice + goldQty*goldPrice;
+  // Quantities from trade log (source of truth), not snapshot
+  const { btcQty, goldQty } = bagQtyAtEndOfMonth(snap.month);
+  const btcPrice  = parseFloat(snap.btc_price_aud  || 0);
+  const goldPrice = parseFloat(snap.gold_price_aud || 0);
+  const grossNAV  = btcQty*btcPrice + goldQty*goldPrice;
 
   // Fees
-  const feeMgmt     = grossNAV * BAG_FEES.mgmtMonthly;
-  const feeBCAdmin  = BAG_FEES.bcAdminFlat;
-  const feeCustody  = grossNAV * BAG_FEES.cbCustody;
-  const totalFees   = feeMgmt + feeBCAdmin + feeCustody;
-  const netNAV      = grossNAV - totalFees;
+  const feeMgmt    = grossNAV * BAG_FEES.mgmtMonthly;
+  const feeBCAdmin = BAG_FEES.bcAdminFlat;
+  const feeCustody = grossNAV * BAG_FEES.cbCustody;
+  const totalFees  = feeMgmt + feeBCAdmin + feeCustody;
+  const netNAV     = grossNAV - totalFees;
 
-  // Units: issued on inflows at PREV month's BC nav/unit
-  const inflows      = parseFloat(snap.inflows_aud  || 0);
-  const outflows     = parseFloat(snap.outflows_aud || 0);
-  const prevBCunit   = prevSnap ? (parseFloat(prevSnap.bc_nav_per_unit || prevSnap.nav_per_unit_est || 1)) : 1;
-  const unitsIn      = inflows  > 0 ? inflows  / prevBCunit : 0;
-  const unitsOut     = outflows > 0 ? outflows / prevBCunit : 0;
-  const prevUnits    = prevSnap ? parseFloat(prevSnap.units_issued || 0) : 0;
+  // Trade fees this month (sum of feeAUD on all trades in this month)
+  const tradeFees = (_marcDB.cache.trades || [])
+    .filter(t => t.month === snap.month && t.feeAUD != null)
+    .reduce((s, t) => s + Math.abs(t.feeAUD), 0);
+
+  // Units — issued at prev month's official NAV/unit (BC if available, else est)
+  const inflows   = parseFloat(snap.inflows_aud  || 0);
+  const outflows  = parseFloat(snap.outflows_aud || 0);
+  const prevUnit  = prevSnap
+    ? parseFloat(prevSnap.bc_nav_per_unit || prevSnap.nav_per_unit_est || 1)
+    : 1;
+  const unitsIn   = inflows  > 0 ? inflows  / prevUnit : 0;
+  const unitsOut  = outflows > 0 ? outflows / prevUnit : 0;
+  const prevUnits = prevSnap ? parseFloat(prevSnap.units_issued || 0) : 0;
   const totalUnits   = prevUnits + unitsIn - unitsOut;
-  const navPerUnitEst= totalUnits > 0 ? netNAV / totalUnits : 1;
+  const navPerUnitEst = totalUnits > 0 ? netNAV / totalUnits : 1;
 
-  // Returns (month/month - 1)
-  const prevBCNav    = prevSnap ? parseFloat(prevSnap.bc_nav_per_unit || prevSnap.nav_per_unit_est || 0) : null;
-  const officialUnit = parseFloat(snap.bc_nav_per_unit || 0) || navPerUnitEst;
-  const actualReturn = prevBCNav && prevBCNav > 0 ? (officialUnit / prevBCNav) - 1 : null;
+  // Official unit price — BC if confirmed, else estimated
+  const bcUnit       = snap.bc_nav_per_unit ? parseFloat(snap.bc_nav_per_unit) : null;
+  const officialUnit = bcUnit || navPerUnitEst;
 
-  // Raw return: weighted BTC+Gold return at month-open prices
+  // Returns: current / previous official − 1
+  const prevOfficial = prevSnap
+    ? parseFloat(prevSnap.bc_nav_per_unit || prevSnap.nav_per_unit_est || 0)
+    : null;
+  const actualReturn = prevOfficial && prevOfficial > 0
+    ? (officialUnit / prevOfficial) - 1
+    : null;
+
+  // Raw return: pure price performance (BTC+Gold weighted by opening allocation)
   const prevBtcPrice  = prevSnap ? parseFloat(prevSnap.btc_price_aud  || 0) : 0;
   const prevGoldPrice = prevSnap ? parseFloat(prevSnap.gold_price_aud || 0) : 0;
   const btcReturn     = prevBtcPrice  > 0 ? (btcPrice  / prevBtcPrice)  - 1 : null;
   const goldReturn    = prevGoldPrice > 0 ? (goldPrice / prevGoldPrice) - 1 : null;
   const prevTotalVal  = btcQty*prevBtcPrice + goldQty*prevGoldPrice;
-  const rawReturn     = (btcReturn !== null && goldReturn !== null && prevTotalVal > 0)
-    ? btcReturn  * (btcQty*prevBtcPrice/prevTotalVal)
-    + goldReturn * (goldQty*prevGoldPrice/prevTotalVal)
+  const rawReturn     = btcReturn !== null && goldReturn !== null && prevTotalVal > 0
+    ? btcReturn  * (btcQty*prevBtcPrice / prevTotalVal)
+    + goldReturn * (goldQty*prevGoldPrice / prevTotalVal)
     : null;
 
-  return {grossNAV, feeMgmt, feeBCAdmin, feeCustody, totalFees, netNAV,
-          unitsIn, unitsOut, totalUnits, navPerUnitEst,
-          actualReturn, rawReturn, btcReturn, goldReturn, prevBCNav, officialUnit};
+  // Timing drag = actual return − raw return (captures entry timing and fees)
+  const timingDrag = actualReturn !== null && rawReturn !== null
+    ? actualReturn - rawReturn
+    : null;
+
+  return {
+    btcQty, goldQty, grossNAV,
+    feeMgmt, feeBCAdmin, feeCustody, totalFees, tradeFees,
+    netNAV, unitsIn, unitsOut, totalUnits, navPerUnitEst,
+    bcUnit, officialUnit, actualReturn, rawReturn, timingDrag,
+    btcReturn, goldReturn, prevOfficial
+  };
 }
 
 function renderBagNavNumbers() {
@@ -1911,86 +1997,82 @@ function renderBagNavNumbers() {
     return;
   }
 
-  const thStyle = 'padding:8px 10px;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap;background:var(--surface2);position:sticky;top:0;';
-  const thStyleL = thStyle.replace('text-align:right','text-align:left');
+  const th  = 'padding:8px 12px;font-family:var(--mono);font-size:9px;color:var(--subtle);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--border);text-align:right;white-space:nowrap;background:var(--surface2);position:sticky;top:0;';
+  const thL = th.replace('text-align:right','text-align:left');
+
+  const rows = snapshots.map((snap, i) => {
+    const prev  = i > 0 ? snapshots[i-1] : null;
+    const calc  = bagCalcNAV(snap, prev);
+    const isBC  = !!snap.bc_nav_per_unit;
+    const reconDiff = isBC && calc.navPerUnitEst > 0
+      ? (parseFloat(snap.bc_nav_per_unit) - calc.navPerUnitEst) / calc.navPerUnitEst
+      : null;
+    const reconFlag = reconDiff !== null && Math.abs(reconDiff) > 0.001;
+
+    const f$    = v => v != null && v > 0 ? '$'+v.toLocaleString('en-AU',{maximumFractionDigits:0}) : '—';
+    const fU    = v => v != null ? '$'+parseFloat(v).toFixed(4) : '—';
+    const fPct  = v => v != null ? (v>=0?'+':'')+(v*100).toFixed(2)+'%' : '—';
+    const pc    = v => v == null ? 'var(--subtle)' : v >= 0 ? 'var(--green)' : 'var(--red)';
+
+    return `<tr style="border-bottom:1px solid var(--border);"
+      onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+      <td style="padding:8px 12px;font-family:var(--mono);font-weight:700;white-space:nowrap;">
+        ${snap.month}
+        ${isBC ? '<span style="color:var(--green);font-size:9px;margin-left:4px;">✓ BC</span>' : ''}
+      </td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);">${snap.btc_price_aud ? '$'+parseFloat(snap.btc_price_aud).toLocaleString('en-AU',{maximumFractionDigits:0}) : '—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);">${snap.gold_price_aud ? '$'+parseFloat(snap.gold_price_aud).toLocaleString('en-AU',{maximumFractionDigits:2}) : '—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);">${calc.btcQty > 0 ? navFmtQty(calc.btcQty) : '—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);">${calc.goldQty > 0 ? navFmtQty(calc.goldQty) : '—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-weight:600;">${f$(calc.grossNAV)}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);">${snap.inflows_aud ? f$(parseFloat(snap.inflows_aud)) : '—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:var(--red);">${f$(calc.totalFees)}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-weight:600;">${f$(calc.netNAV)}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);">${calc.totalUnits > 0 ? calc.totalUnits.toLocaleString('en-AU',{maximumFractionDigits:2}) : '—'}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:${isBC?'var(--muted)':'var(--text)'};">${fU(calc.navPerUnitEst)}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-weight:700;color:${isBC?'var(--green)':'var(--subtle)'};">
+        ${isBC ? fU(parseFloat(snap.bc_nav_per_unit)) : '—'}
+      </td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:${reconFlag?'var(--red)':'var(--subtle)'};">
+        ${reconDiff!=null ? fPct(reconDiff)+(reconFlag?' ⚠':'') : '—'}
+      </td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:${pc(calc.rawReturn)};">${fPct(calc.rawReturn)}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-weight:600;color:${pc(calc.actualReturn)};">${fPct(calc.actualReturn)}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:${pc(calc.timingDrag)};">
+        ${calc.timingDrag != null ? fPct(calc.timingDrag) : '—'}
+      </td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:${pc(calc.btcReturn)};">${fPct(calc.btcReturn)}</td>
+      <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:${pc(calc.goldReturn)};">${fPct(calc.goldReturn)}</td>
+      <td style="padding:8px 12px;text-align:center;white-space:nowrap;">
+        <button onclick="bagEditNavRow('${snap.month}')" style="font-size:9px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:2px;cursor:pointer;">✎ Edit</button>
+      </td>
+    </tr>`;
+  }).join('');
 
   grid.innerHTML = `
-    <table style="width:100%;border-collapse:collapse;font-size:11px;">
-      <thead>
-        <tr>
-          <th style="${thStyleL}">Month</th>
-          <th style="${thStyle}">BTC Price AUD</th>
-          <th style="${thStyle}">PAXG Price AUD</th>
-          <th style="${thStyle}">BTC Qty</th>
-          <th style="${thStyle}">PAXG Qty</th>
-          <th style="${thStyle}">Gross NAV</th>
-          <th style="${thStyle}">Inflows</th>
-          <th style="${thStyle}">Total Fees</th>
-          <th style="${thStyle}">Net NAV Est</th>
-          <th style="${thStyle}">Units Issued</th>
-          <th style="${thStyle}">NAV/Unit Est</th>
-          <th style="${thStyle}" style="color:var(--green);">BC NAV/Unit ✓</th>
-          <th style="${thStyle}">Recon Diff</th>
-          <th style="${thStyle}">Raw Return</th>
-          <th style="${thStyle}">Actual Return</th>
-          <th style="${thStyle}">BTC Return</th>
-          <th style="${thStyle}">Gold Return</th>
-          <th style="${thStyle}">AUD/USD</th>
-          <th style="${thStyle}">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${snapshots.map((snap, i) => {
-          const prev   = i > 0 ? snapshots[i-1] : null;
-          const calc   = bagCalcNAV(snap, prev);
-          const isBCConfirmed = !!snap.bc_nav_per_unit;
-          const officialUnit  = isBCConfirmed ? parseFloat(snap.bc_nav_per_unit) : calc.navPerUnitEst;
-          const reconDiff     = isBCConfirmed && calc.navPerUnitEst > 0
-            ? (parseFloat(snap.bc_nav_per_unit) - calc.navPerUnitEst) / calc.navPerUnitEst
-            : null;
-          const reconFlag     = reconDiff !== null && Math.abs(reconDiff) > 0.001;
-          const fmt$  = v => v != null ? '$'+v.toLocaleString('en-AU',{maximumFractionDigits:0}) : '—';
-          const fmtU  = v => v != null ? '$'+v.toFixed(4) : '—';
-          const fmtPct= v => v != null ? (v>=0?'+':'')+(v*100).toFixed(2)+'%' : '—';
-          const pc    = v => v == null ? 'var(--subtle)' : v >= 0 ? 'var(--green)' : 'var(--red)';
-
-          return `<tr style="border-bottom:1px solid var(--border);" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
-            <td style="padding:8px 10px;font-family:var(--mono);font-weight:700;white-space:nowrap;">
-              ${snap.month}
-              ${isBCConfirmed ? '<span style="color:var(--green);font-size:9px;margin-left:4px;">✓ BC</span>' : ''}
-              ${snap.prices_locked ? '' : '<span style="color:var(--amber);font-size:9px;margin-left:2px;">⏳</span>'}
-            </td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.btc_price_aud ? '$'+parseFloat(snap.btc_price_aud).toLocaleString('en-AU',{maximumFractionDigits:0}) : '—'}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.gold_price_aud ? '$'+parseFloat(snap.gold_price_aud).toLocaleString('en-AU',{maximumFractionDigits:2}) : '—'}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.btc_qty ? navFmtQty(parseFloat(snap.btc_qty)) : '—'}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.gold_qty ? navFmtQty(parseFloat(snap.gold_qty)) : '—'}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:600;">${fmt$(calc.grossNAV)}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.inflows_aud ? fmt$(parseFloat(snap.inflows_aud)) : '—'}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:var(--red);">${fmt$(calc.totalFees)}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:600;">${fmt$(calc.netNAV)}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${calc.totalUnits > 0 ? calc.totalUnits.toLocaleString('en-AU',{maximumFractionDigits:2}) : '—'}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${isBCConfirmed?'var(--muted)':'var(--text)'};">${fmtU(calc.navPerUnitEst)}</td>
-            <td style="padding:8px 10px;text-align:right;">
-              <div style="display:flex;align-items:center;justify-content:flex-end;gap:5px;">
-                <span style="font-family:var(--mono);font-weight:700;color:${isBCConfirmed?'var(--green)':'var(--subtle)'};">${isBCConfirmed?fmtU(parseFloat(snap.bc_nav_per_unit)):'—'}</span>
-                <button onclick="bagEditBCNav('${snap.month}','${snap.fund_id}')" style="font-size:9px;background:${isBCConfirmed?'var(--green-dim)':'var(--surface2)'};border:1px solid ${isBCConfirmed?'var(--green-mid)':'var(--border)'};color:${isBCConfirmed?'var(--green)':'var(--muted)'};padding:2px 6px;border-radius:2px;cursor:pointer;">
-                  ${isBCConfirmed?'✎ Edit':'+ Enter'}
-                </button>
-              </div>
-            </td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${reconFlag?'var(--red)':'var(--subtle)'};">${reconDiff!=null?fmtPct(reconDiff):'—'}${reconFlag?' ⚠':''}
-            </td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${pc(calc.rawReturn)};">${fmtPct(calc.rawReturn)}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);font-weight:600;color:${pc(calc.actualReturn)};">${fmtPct(calc.actualReturn)}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${pc(calc.btcReturn)};">${fmtPct(calc.btcReturn)}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);color:${pc(calc.goldReturn)};">${fmtPct(calc.goldReturn)}</td>
-            <td style="padding:8px 10px;text-align:right;font-family:var(--mono);">${snap.aud_usd_rate ? parseFloat(snap.aud_usd_rate).toFixed(4) : '—'}</td>
-            <td style="padding:8px 10px;text-align:center;white-space:nowrap;">
-              <button onclick="bagEditNavRow('${snap.month}')" style="font-size:9px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:2px;cursor:pointer;">✎ Edit</button>
-            </td>
-          </tr>`;
-        }).join('')}
-      </tbody>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:1400px;">
+      <thead><tr>
+        <th style="${thL}">Month</th>
+        <th style="${th}">BTC Price</th>
+        <th style="${th}">PAXG Price</th>
+        <th style="${th}">BTC Qty</th>
+        <th style="${th}">PAXG Qty</th>
+        <th style="${th}">Gross NAV</th>
+        <th style="${th}">Inflows</th>
+        <th style="${th}">Fees</th>
+        <th style="${th}">Net NAV Est</th>
+        <th style="${th}">Units</th>
+        <th style="${th}">Est/Unit</th>
+        <th style="${th}" style="color:var(--green);">BC NAV/Unit</th>
+        <th style="${th}">Recon Diff</th>
+        <th style="${th}">Raw Return</th>
+        <th style="${th}">Actual Return</th>
+        <th style="${th}">Timing Drag</th>
+        <th style="${th}">BTC Ret</th>
+        <th style="${th}">Gold Ret</th>
+        <th style="${th}">Edit</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
     </table>`;
 }
 
@@ -2014,32 +2096,64 @@ function bagEditNavRow(month) {
 }
 
 function bagEditBCNav(month, fundId) {
-  const snap = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
+  const snap    = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
   const current = snap?.bc_nav_per_unit || '';
-  const val = prompt(`Enter BC confirmed NAV/unit for ${month}:\n(Leave blank to clear)`, current);
-  if (val === null) return; // cancelled
-  const numVal = val.trim() === '' ? null : parseFloat(val);
-  if (val.trim() !== '' && isNaN(numVal)) { alert('Invalid number'); return; }
-  dbSaveBagSnapshot({
-    month, fund_id: fundId || _marcDB.activeFund?.id,
-    bc_nav_per_unit: numVal,
-    bc_confirmed:    numVal !== null,
-    bc_confirmed_at: numVal !== null ? new Date().toISOString() : null
-  }).then(() => {
-    dbLoadBagSnapshots(_marcDB.activeFund?.id).then(() => {
-      renderBagNavNumbers();
-      renderBagOverview();
-      // Trigger AI reconciliation if diff > 0.1%
-      if (numVal !== null) {
-        const snap2 = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
-        const prev  = (_marcDB.cache.bagSnapshots || [])
-          .filter(s => s.month < month).sort((a,b) => b.month.localeCompare(a.month))[0];
-        const calc  = bagCalcNAV(snap2, prev);
-        const diff  = Math.abs((numVal - calc.navPerUnitEst) / calc.navPerUnitEst);
-        if (diff > 0.001) bagRunReconciliationAI(month, numVal, calc.navPerUnitEst, snap2);
-      }
+
+  // Build inline modal
+  const html = `
+    <div style="position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;" id="bc-nav-modal">
+      <div style="background:var(--surface);border:1px solid var(--border2);border-radius:6px;width:360px;box-shadow:0 20px 80px rgba(0,0,0,.7);">
+        <div style="padding:13px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+          <h3 style="font-size:13px;font-weight:700;">BC Confirmed NAV/Unit — ${month}</h3>
+          <button onclick="document.getElementById('bc-nav-modal').remove()" style="background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;padding:3px 9px;border-radius:2px;font-size:11px;">✕</button>
+        </div>
+        <div style="padding:16px 18px;">
+          <div style="font-size:9px;color:var(--subtle);text-transform:uppercase;letter-spacing:.5px;font-family:var(--mono);margin-bottom:5px;">NAV per Unit (AUD)</div>
+          <input type="number" id="bc-nav-input" value="${current}" step="0.000001" placeholder="e.g. 1.0039"
+            style="width:100%;font-family:var(--mono);font-size:14px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:3px;box-sizing:border-box;outline:none;"/>
+          <div style="font-size:9px;color:var(--subtle);margin-top:5px;">Leave blank to clear BC confirmation and revert to estimate.</div>
+        </div>
+        <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;">
+          <button onclick="document.getElementById('bc-nav-modal').remove()" style="background:transparent;border:1px solid var(--border);color:var(--muted);padding:6px 14px;border-radius:3px;cursor:pointer;font-size:11px;">Cancel</button>
+          <button onclick="bagSaveBCNav('${month}','${fundId}')" style="background:var(--green);color:#000;border:none;padding:6px 18px;border-radius:3px;cursor:pointer;font-size:12px;font-weight:700;">Confirm</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+  setTimeout(() => document.getElementById('bc-nav-input')?.focus(), 50);
+}
+
+async function bagSaveBCNav(month, fundId) {
+  const el     = document.getElementById('bc-nav-input');
+  const rawVal = el?.value?.trim();
+  const numVal = rawVal ? parseFloat(rawVal) : null;
+  if (rawVal && isNaN(numVal)) { alert('Invalid number'); return; }
+
+  document.getElementById('bc-nav-modal')?.remove();
+
+  try {
+    await dbSaveBagSnapshot({
+      month,
+      fund_id:        fundId || _marcDB.activeFund?.id,
+      bc_nav_per_unit: numVal,
+      bc_confirmed:    numVal !== null,
+      bc_confirmed_at: numVal !== null ? new Date().toISOString() : null
     });
-  }).catch(e => alert('Save failed: ' + e.message));
+    await dbLoadBagSnapshots(_marcDB.activeFund?.id);
+    renderBagNavNumbers();
+    renderBagOverview();
+    renderBagPerformance();
+
+    // Trigger AI reconciliation if diff > 0.1%
+    if (numVal !== null) {
+      const updatedSnap = (_marcDB.cache.bagSnapshots || []).find(s => s.month === month);
+      const prev = (_marcDB.cache.bagSnapshots || [])
+        .filter(s => s.month < month).sort((a,b) => b.month.localeCompare(a.month))[0];
+      const calc = bagCalcNAV(updatedSnap, prev);
+      const diff = Math.abs((numVal - calc.navPerUnitEst) / Math.max(calc.navPerUnitEst, 0.0001));
+      if (diff > 0.001) bagRunReconciliationAI(month, numVal, calc.navPerUnitEst, updatedSnap);
+    }
+  } catch(e) { alert('Save failed: ' + e.message); }
 }
 
 function bagOpenNavEditModal(month, snap) {
